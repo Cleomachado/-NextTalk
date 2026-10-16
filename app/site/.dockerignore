@@ -1,0 +1,13 @@
+Dockerfile
+.dockerignore
+.DS_Store
+
+# 🔐 Tudo nesta pasta vira download PÚBLICO em seudominio.com.br/<arquivo> (o Dockerfile copia a
+# pasta inteira e o nginx serve por try_files). Um .env, um rascunho ou um backup esquecido aqui
+# não é "arquivo solto": é vazamento. Bloqueio explícito (auditoria 07/09).
+.env
+.env.*
+*.bak
+*.log
+.git
+.gitignore

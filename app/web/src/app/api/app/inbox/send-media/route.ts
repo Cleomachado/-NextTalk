@@ -1,0 +1,10 @@
+import { motor } from "@/lib/motor";
+
+export const dynamic = "force-dynamic";
+
+// Enviar mídia (foto/áudio/documento) por uma conversa do cliente.
+export async function POST(req: Request) {
+  const body = await req.json().catch(() => ({}));
+  const r = await motor.post("/app/inbox/send-media", body);
+  return Response.json(r.data, { status: r.status });
+}

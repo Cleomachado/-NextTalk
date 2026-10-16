@@ -1,0 +1,10 @@
+{
+  "_aviso": "NUNCA use \"*\" aqui — só dispara nos JIDs de grupo listados abaixo. Vazio = não manda pra ninguém.",
+  "enabled": true,
+  "message": "Olá! 👋 Que bom te ver por aqui!\n\nSeja muito bem-vindo(a) ao nosso grupo. 🎉 Se tiver qualquer dúvida, é só me chamar aqui no privado que eu te ajudo. 🟢",
+  "groups": [
+    "SEU_GRUPO@g.us",
+    "SEU_GRUPO@g.us"
+  ],
+  "delayMs": 3000
+}

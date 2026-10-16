@@ -1,0 +1,9 @@
+{
+  "_aviso": "O resumo é POSTADO DENTRO do grupo (todos veem). 'time' é HH:MM no fuso 'timezone'. Comece só com o grupo de teste; adicione o de afiliados quando tiver certeza. enabled=false desliga tudo.",
+  "enabled": false,
+  "timezone": "America/Sao_Paulo",
+  "model": "claude-haiku-4-5",
+  "maxMessages": 500,
+  "minMessages": 3,
+  "groups": []
+}

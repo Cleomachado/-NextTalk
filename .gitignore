@@ -1,0 +1,74 @@
+# ── ZapConverte · .gitignore (raiz) ──────────────────────────────────────────
+# Objetivo: NENHUM segredo vai pro GitHub. O deploy NÃO depende do git (deploy.sh
+# usa rsync, que ignora este arquivo e continua enviando tudo pra VPS), então
+# esconder os arquivos abaixo do git é seguro e não muda nada no deploy.
+
+# Segredos — variáveis de ambiente (mantém só os .example, que são modelos)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Manifestos de deploy COM segredos em texto puro (token UazAPI, admin-token,
+# senha do Postgres, chave Anthropic/OpenAI). Ficam só na sua máquina + na VPS.
+# Pra versionar a infra sem segredo depois: migrar pra Docker secrets e commitar
+# uma versão com ${VARIÁVEL} no lugar dos valores.
+deploy/zapconverte-app-stack.yml
+deploy/zapconverte-stack.yml
+
+# Dependências e build
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+out/
+build/
+dist/
+**/dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# Sistema / logs / temporários
+.DS_Store
+**/.DS_Store
+*.log
+*.pem
+*.key
+
+# Transcrições de conversas REAIS de clientes (nome/telefone/e-mail) = PII.
+# Ficam só na sua máquina; NÃO vão pro GitHub. Pra versionar mesmo assim, remova
+# esta linha ciente de que expõe dado de cliente no repositório.
+docs/conversas-*.md
+
+# Exports/PDFs (podem conter contatos = PII) — nunca versionar
+*.pdf
+
+# Exports de contatos (telefones/e-mails = PII pesado) — nunca versionar
+*.csv
+
+# Vídeo da VSL (~20MB). FORA do git de propósito: binário grande fica no histórico pra sempre e
+# não dá pra diferenciar. Ele CHEGA na VPS pelo rsync do deploy.sh (que copia app/ inteiro) e é
+# embutido na imagem pelo `COPY .` do Dockerfile do site.
+# ⚠️ Num clone NOVO o arquivo não vem: copie app/site/vsl-workshop-720p.mp4 antes de deployar,
+# senão a /workshop sobe com o player sem fonte.
+#
+# 🔁 O NOME CARREGA A VERSÃO de propósito. O nginx serve .mp4 com `expires 7d`: trocando o
+# conteúdo e mantendo o nome, quem visitou a página na última semana continuaria vendo a VSL
+# ANTIGA do cache do navegador — inclusive quem for conferir o próprio deploy.
+# Ao trocar a VSL de novo: MUDE O NOME (ex.: -v2) e ajuste o data-src no workshop.html.
+#
+# 📏 COMO EXPORTAR (medido em 11/09/2026, Chrome com rede limitada a 4 Mbps):
+#   A versão antiga era HEVC 10-bit 480x854 SEM faststart (moov no FIM do arquivo) — o navegador
+#   tinha que baixar os 41MB INTEIROS antes do primeiro frame: 83 SEGUNDOS até começar a tocar.
+#   A de hoje é H.264 High 720x1280 COM faststart: 0,5 SEGUNDO até tocar, e metade do tamanho.
+#   Receita (ffmpeg), sempre que trocar a VSL:
+#     -c:v libx264 -profile:v high -pix_fmt yuv420p -crf 23 -preset slow \
+#     -c:a aac -b:a 128k -movflags +faststart
+#   Conferir depois: as caixas do MP4 devem sair na ordem ftyp → moov → mdat (moov ANTES do mdat).
+#   NÃO publicar HEVC/H.265: o Chrome responde vazio em canPlayType('video/mp4; codecs="hvc1"'),
+#   e em Windows sem o decodificador da Microsoft o vídeo não roda.
+app/site/vsl-workshop*.mp4
+# Material bruto (prints, criativos) — não é código
+PRINTS/

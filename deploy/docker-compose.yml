@@ -1,0 +1,57 @@
+services:
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    restart: always
+    depends_on:
+      - postgres
+      - redis
+    env_file: .env
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks:
+      - oxizap
+    # Sem porta pública: o Caddy faz o TLS e o proxy
+
+  postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: evolution_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - oxizap
+
+  redis:
+    image: redis:7
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - oxizap
+
+  caddy:
+    image: caddy:2
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - oxizap
+
+volumes:
+  evolution_instances:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  oxizap:

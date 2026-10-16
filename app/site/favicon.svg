@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="ZapConverte">
+  <!-- Marca do ZapConverte: mesma da barra lateral do painel (quadrado arredondado verde
+       com o balão de conversa). Fica legível a 16px porque o balão é grosso e o fundo cheio. -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3BFF9F"/>
+      <stop offset="1" stop-color="#12C46E"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#g)"/>
+  <path d="M50 30.6a19 19 0 0 1-2 8.6 19.2 19.2 0 0 1-17.2 10.6 19 19 0 0 1-8.6-2L12 52l4.2-12.8a19 19 0 0 1-2-8.6A19.2 19.2 0 0 1 24.8 13.4a19 19 0 0 1 8.6-2h1.1A19.1 19.1 0 0 1 52 29.5z"
+        fill="none" stroke="#062916" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

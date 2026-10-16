@@ -1,0 +1,4 @@
+# Troque pelo seu subdomínio real. O Caddy emite o certificado HTTPS sozinho (Let's Encrypt).
+api.seudominio.com.br {
+	reverse_proxy evolution-api:8080
+}

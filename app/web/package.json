@@ -1,0 +1,27 @@
+{
+  "name": "zapconverte-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ZapConverte — painel visual (Next.js). Reaproveita a stack do OminiFlow (Next 15 + Supabase).",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@types/qrcode": "^1.5.6",
+    "@xyflow/react": "^12.11.2",
+    "next": "^15.3.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "typescript": "^5.8.0"
+  }
+}
