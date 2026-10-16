@@ -208,7 +208,7 @@ export type StepBody =
   | { type: "add_to_group"; groupJid: string; account?: string; convite?: boolean; textoConvite?: string }
   | { type: "mention_all"; groupJid: string; text: string; hidden?: boolean; account?: string }
   | { type: "gsheet_append"; sheetUrl: string; colunas: string[]; cabecalhos?: string[]; chave?: number | null }
-  | { type: "gsheet_read"; sheetUrl: string; aba?: string; salvarEm?: string; pularSe?: string; limite?: number; ab?: boolean }
+  | { type: "gsheet_read"; sheetUrl: string; aba?: string; salvarEm?: string; pularSe?: string; limite?: number; ab?: boolean; colunaData?: string; ultimasHoras?: number }
   | { type: "email"; para: string; assunto: string; corpo: string; nomeRemetente?: string; responderPara?: string }
   // Chamada HTTP a outro sistema. `authValor` só existe na ida (o servidor cifra e devolve
   // apenas `authConfigurado`) — o segredo nunca volta pra tela.
@@ -231,7 +231,7 @@ export type StepBody =
   | { type: "set_variable"; campo: string; valor: string }
   | { type: "google_contact"; nome?: string; telefone?: string; email?: string; notas?: string }
   | { type: "google_doc"; modo?: "criar" | "anexar" | "preencher"; titulo?: string; corpo?: string; docUrl?: string }
-  | { type: "google_calendar"; acao?: "horarios" | "criar" | "calls_do_dia"; dias?: number; inicio?: string; fim?: string; duracaoMin?: number;
+  | { type: "google_calendar"; acao?: "horarios" | "criar" | "calls_do_dia" | "convidar"; busca?: string; email?: string; dias?: number; inicio?: string; fim?: string; duracaoMin?: number;
       diasSemana?: number[]; antecedenciaMin?: number; maxOpcoes?: number; porPeriodo?: boolean; titulo?: string; descricao?: string; quando?: string; calendarId?: string; diaOffset?: number; salvarEm?: string; umPorDia?: boolean }
   | { type: "reminder"; text?: string }
   // ✍️ ZAPSIGN: assinaturas pendentes (token em Integrações → ZapSign).

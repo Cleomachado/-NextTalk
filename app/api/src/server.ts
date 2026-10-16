@@ -11,7 +11,7 @@ import type { Automation } from "./engine/runner.js";
 import { runAutomationsFor, resumeCapture, resumeAgentTurn, resumeScheduledFlow, resumeButtonBranch, BUTTON_VAR, produtoCasa, executarPassoDoFluxo } from "./engine/runner.js";
 import { toGraph, saidaPadrao, hasHandleEdge, nextNodeId } from "./engine/graph.js";
 import { transcribeAudio, transcribeAudioBuf, describeImage } from "./engine/ai.js";
-import { enrichAvatars, scheduleEnrich, syncLiteContacts } from "./engine/avatars.js";
+import { enrichAvatars, enrichAvatarsOficial, scheduleEnrich, syncLiteContacts } from "./engine/avatars.js";
 import { resumeReminderCapture, REMINDER_VAR } from "./engine/reminder-capture.js";
 import { isBotEcho, withEchoGuard } from "./engine/bot-echo.js";
 import { loadReminders, startReminderScheduler, type Reminder } from "./engine/reminders.js";
@@ -2934,6 +2934,23 @@ app.get("/app/groups", async (req, reply) => {
   });
 });
 
+// 📷 Fotos dos leads da API Oficial, por workspace, pelo número Lite DO PRÓPRIO workspace.
+let fotosOficialRodando = false;
+async function fotosDosLeadsOficial(): Promise<void> {
+  if (fotosOficialRodando) return;
+  fotosOficialRodando = true;
+  try {
+    const wss = await query<{ workspace_id: string }>(
+      "SELECT DISTINCT workspace_id FROM inbox_messages WHERE account LIKE 'meta-%' AND NOT from_me").catch(() => []);
+    for (const { workspace_id: ws } of wss) {
+      const token = ws === getPrimaryWorkspace() ? config.uazapi.token : (getCachedFor<LiteStored[]>(ws, "lite-instances") ?? [])[0]?.token;
+      if (!token) continue; // cliente sem número Lite: sem de onde buscar a foto
+      const n = await enrichAvatarsOficial({ uazUrl: config.uazapi.url, token, mediaBase: MEDIA_PUBLIC_BASE, wsId: ws, limite: 40 }).catch(() => 0);
+      if (n) console.log(`📷 fotos de leads da API: ${n} salva(s) · ${ws.slice(0, 11)}`);
+    }
+  } finally { fotosOficialRodando = false; }
+}
+
 // Conecta o WhatsApp do cliente (cria instância LITE no workspace DELE + QR). Limite: 1 número por ora.
 // Id OPACO da instância pro navegador: o token da UazAPI é credencial plena (envia/lê tudo) e
 // não pode transitar pelo browser nem por query string (auditoria 06/08). O painel usa este id;
@@ -4799,7 +4816,8 @@ function validateAutomations(list: any): string | null {
       if (s.type === "gsheet_append" && (typeof s.sheetUrl !== "string" || !Array.isArray(s.colunas))) return "passo gsheet_append precisa de 'sheetUrl' e 'colunas'";
       if (s.type === "gsheet_append" && s.chave != null && (typeof s.chave !== "number" || s.chave < 0 || s.chave > 200)) return "passo Planilha: a coluna-chave (atualizar a linha) deve ser uma das colunas lidas";
       if (s.type === "google_calendar") {
-        if (s.acao !== undefined && !["horarios", "criar", "calls_do_dia"].includes(s.acao)) return "passo Agenda Google: ação inválida";
+        if (s.acao !== undefined && !["horarios", "criar", "calls_do_dia", "convidar"].includes(s.acao)) return "passo Agenda Google: ação inválida";
+        if (s.acao === "convidar" && a.enabled !== false && !String(s.busca ?? "").trim()) return "passo Agenda Google (convidar): cole o link do Meet do evento (ou um trecho do título)";
         if (s.duracaoMin !== undefined && (typeof s.duracaoMin !== "number" || s.duracaoMin < 5 || s.duracaoMin > 480)) return "passo Agenda Google: duração entre 5 e 480 minutos";
         if (s.acao === "criar" && a.enabled !== false && !String(s.quando ?? "").trim()) return "passo Agenda Google (marcar): informe de onde vem o horário (ex.: {{horario_escolhido}})";
       }
@@ -5460,6 +5478,47 @@ app.get("/pix/qr/:arquivo", async (req, reply) => {
   const png = await qrDoPix(id).catch(() => null);
   if (!png) return reply.code(404).send({ error: "não encontrado" });
   return reply.header("content-type", "image/png").header("cache-control", "public, max-age=604800").send(png);
+});
+
+// 📅 "SALVAR NA MINHA AGENDA" (16/10/2026): link que abre o Google Agenda do LEAD já preenchido com a
+// PRÓXIMA ocorrência de um evento semanal (ex.: o workshop de todo sábado). Não precisa de login nem
+// de API: é o formulário "action=TEMPLATE" do próprio Google. ?formato=ics devolve o arquivo .ics
+// (iPhone/Outlook). Parâmetros: t (título), d (dia da semana 0=dom…6=sáb), i/f (HH:MM, Brasília),
+// l (local/link do Meet), x (detalhes). Só redireciona pro calendar.google.com — não é open redirect.
+app.get("/agenda/semanal", async (req, reply) => {
+  const q = (req.query ?? {}) as any;
+  const titulo = String(q.t ?? "Evento").slice(0, 200);
+  const dia = Math.min(6, Math.max(0, Number(q.d ?? 6) || 0));
+  const hm = (v: any, pad: string) => (/^\d{2}:\d{2}$/.test(String(v ?? "")) ? String(v) : pad);
+  const ini = hm(q.i, "09:00"), fim = hm(q.f, "10:00");
+  const local = String(q.l ?? "").slice(0, 300), det = String(q.x ?? "").slice(0, 1000);
+  // Próxima data (Brasília, UTC-3 fixo) cujo FIM ainda não passou.
+  const agoraBR = new Date(Date.now() - 3 * 3600_000);
+  let alvo = new Date(Date.UTC(agoraBR.getUTCFullYear(), agoraBR.getUTCMonth(), agoraBR.getUTCDate()));
+  for (let k = 0; k < 8; k++) {
+    const c = new Date(alvo.getTime() + k * 86400_000);
+    if (c.getUTCDay() !== dia) continue;
+    const [fh, fm] = fim.split(":").map(Number);
+    if (c.getTime() + (fh * 60 + fm) * 60_000 > agoraBR.getTime()) { alvo = c; break; }
+  }
+  const ymd = alvo.toISOString().slice(0, 10).replace(/-/g, "");
+  const utc = (h: string) => { const [H, M] = h.split(":").map(Number); const t = new Date(alvo.getTime() + ((H + 3) * 60 + M) * 60_000); return t.toISOString().replace(/[-:]/g, "").slice(0, 15) + "Z"; };
+  if (String(q.formato ?? "") === "ics") {
+    const esc = (v: string) => v.replace(/[\\;,]/g, (m) => "\\" + m).replace(/\n/g, "\\n");
+    const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//ZapConverte//Agenda//PT", "BEGIN:VEVENT",
+      `UID:${ymd}-${Buffer.from(titulo).toString("hex").slice(0, 24)}@zapconverte`, `DTSTAMP:${utc("00:00")}`,
+      `DTSTART:${utc(ini)}`, `DTEND:${utc(fim)}`, `SUMMARY:${esc(titulo)}`, `LOCATION:${esc(local)}`, `DESCRIPTION:${esc(det || local)}`,
+      "BEGIN:VALARM", "TRIGGER:-PT30M", "ACTION:DISPLAY", `DESCRIPTION:${esc(titulo)}`, "END:VALARM", "END:VEVENT", "END:VCALENDAR"].join("\r\n");
+    return reply.header("content-type", "text/calendar; charset=utf-8").header("content-disposition", `attachment; filename="evento-${ymd}.ics"`).send(ics);
+  }
+  const u = new URL("https://calendar.google.com/calendar/render");
+  u.searchParams.set("action", "TEMPLATE");
+  u.searchParams.set("text", titulo);
+  u.searchParams.set("dates", `${utc(ini)}/${utc(fim)}`);
+  u.searchParams.set("ctz", "America/Sao_Paulo");
+  if (local) u.searchParams.set("location", local);
+  u.searchParams.set("details", det || local);
+  return reply.redirect(u.toString(), 302);
 });
 
 app.get("/media/:id", async (req, reply) => {
@@ -11270,7 +11329,10 @@ initSchema()
     setInterval(() => { emailsCicloTrialTick().catch(() => {}); }, 3_600_000);
     ensureWebhooks().catch((e) => console.error("ensureWebhooks:", e)); // liga webhook em todas as instâncias
     // Fotos de perfil: 1ª leva ~30s após o boot e depois a cada 10min (contatos sem foto).
-    const runAvatars = () => enrichAvatars({ token: config.uazapi.token, mediaBase: MEDIA_PUBLIC_BASE }).catch(() => {});
+    const runAvatars = () => {
+      enrichAvatars({ token: config.uazapi.token, mediaBase: MEDIA_PUBLIC_BASE }).catch(() => {});
+      void fotosDosLeadsOficial();
+    };
     setTimeout(runAvatars, 30_000);
     setInterval(runAvatars, 10 * 60_000);
   })

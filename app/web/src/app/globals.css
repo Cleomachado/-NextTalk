@@ -3095,3 +3095,23 @@ button.ofi-topo-info.clicavel:hover { background: color-mix(in srgb, var(--ink) 
 /* Baixar áudio no balão (14/10/2026) */
 .ab-salvar { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; background: none; border: 0; padding: 0 2px; font-size: 11.5px; color: var(--ab-cinza); cursor: pointer; opacity: .75; }
 .ab-salvar:hover { opacity: 1; text-decoration: underline; }
+
+/* 👁 MODO PRIVADO (só super admin): vidro jateado sobre nome, número e foto dos clientes; o mouse
+   revela o item. Pra gravar anúncio/stories sem expor dado de cliente (16/10/2026). */
+.modo-privado-btn { display: inline-flex; align-items: center; gap: 6px; margin-right: 8px; }
+.modo-privado-btn.on { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); color: var(--accent-deep); }
+@media (max-width: 640px) { .modo-privado-btn .rot { display: none; } }
+html.zc-privado :is(
+  .ofi-chat .ofi-ava, .ofi-chat .ofi-nome, .ofi-topo .ofi-ava, .ofi-topo-info,
+  .inbox-chat .inbox-ava, .inbox-chat-top b, .inbox-head-info .inbox-ava, .inbox-head-nome,
+  .mm-name, .mm-num
+) {
+  filter: blur(7px) saturate(.6);
+  transition: filter .18s ease;
+  user-select: none;
+}
+html.zc-privado :is(
+  .ofi-chat .ofi-ava, .ofi-chat .ofi-nome, .ofi-topo .ofi-ava, .ofi-topo-info,
+  .inbox-chat .inbox-ava, .inbox-chat-top b, .inbox-head-info .inbox-ava, .inbox-head-nome,
+  .mm-name, .mm-num
+):hover { filter: none; user-select: auto; }

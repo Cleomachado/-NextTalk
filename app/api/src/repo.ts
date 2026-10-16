@@ -1407,12 +1407,13 @@ export async function chatsDaApiOficial(
        )
        SELECT u.chat_id,
               COALESCE(c.name, u.sender_name) AS name,
-              c.avatar_url,
+              COALESCE(c.avatar_url, av.url) AS avatar_url,
               u.body AS last_body, u.ts AS last_ts, u.from_me,
               a.total, a.recebidas
          FROM ultima u
          JOIN agg a ON a.chat_id = u.chat_id
          LEFT JOIN contacts c ON c.phone = u.chat_id AND c.workspace_id = $1
+         LEFT JOIN chat_avatars av ON av.chat_id = u.chat_id AND av.workspace_id = $1
         ${filtroBusca}
         ORDER BY u.ts DESC NULLS LAST`,
       params,

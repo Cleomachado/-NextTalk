@@ -8,6 +8,7 @@ import { AvisoDesconectado } from "@/components/AvisoDesconectado";
 import { WelcomeTour, useWelcomeTour, PANEL_TOUR, CLIENT_TOUR } from "@/components/WelcomeTour";
 import { ModalTermos, useTermosLogin } from "@/components/TermosAceite";
 import { UserMenu } from "@/components/UserMenu";
+import { ModoPrivado } from "@/components/ModoPrivado";
 import { SeletorIdioma, useI18n, type Idioma } from "@/lib/i18n";
 import { MorningAffirmationModal, useMorningAffirmation } from "@/components/MorningAffirmation";
 import { Icon } from "@/components/icons";
@@ -403,6 +404,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 conversa aberta (WPP Api e WPP ao Vivo). Enfeite que parece função só gera clique morto. */}
             {/* O "?" saiu daqui (18/09): virou item do menu da foto — a barra ficava com um
                 ponto de interrogação solto e a foto não fazia nada ao clicar. */}
+            <ModoPrivado ativo={!!isAdmin} />
             <UserMenu
               nome={session?.user.name}
               email={session?.user.email}

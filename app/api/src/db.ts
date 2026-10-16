@@ -501,6 +501,16 @@ export async function initSchema(): Promise<void> {
     ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address      TEXT;   -- endereço
     ALTER TABLE contacts ADD COLUMN IF NOT EXISTS notes        TEXT;   -- descrição / bullet points (uma linha por "•")
     ALTER TABLE contacts ADD COLUMN IF NOT EXISTS crm_value    NUMERIC(12,2); -- valor do negócio
+    -- Foto de perfil por CONVERSA da API Oficial (16/10/2026): a maioria das conversas da API não
+    -- tem linha em contacts com o mesmo número (9º dígito, só template enviado…), então a foto
+    -- buscada na UazAPI mora aqui, por chat_id. tentado_em segura a re-tentativa (2 dias).
+    CREATE TABLE IF NOT EXISTS chat_avatars (
+      workspace_id TEXT NOT NULL,
+      chat_id      TEXT NOT NULL,
+      url          TEXT,
+      tentado_em   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (workspace_id, chat_id)
+    );
     CREATE INDEX IF NOT EXISTS contacts_crm_stage_idx ON contacts(workspace_id, crm_stage_id, crm_pos);
 
     -- ═══ EQUIPE (multiusuário por workspace) ═══

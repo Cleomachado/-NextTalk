@@ -13,7 +13,7 @@ import { scheduleResume, SLEEP_MAX_MS } from "./flow-jobs.js";
 import { getCurrentWorkspace, getCurrentInstanceToken } from "../workspace-context.js";
 import { getCachedFor } from "../config-store.js";
 import { decryptSecret } from "../crypto.js";
-import { parseServiceAccount, sheetIdFromUrl, appendSheetRow, explicaErroGoogle, refreshGoogleAccessToken, createGoogleContact, createGoogleDoc, appendGoogleDoc, replaceInGoogleDoc, docIdFromUrl, appendSheetRowOAuth, faltaEscopo, listCalendarEventsOAuth, createCalendarEventOAuth, upsertSheetRow, upsertSheetRowOAuth, findGoogleContactByPhone, updateGoogleContact, readSheetRowsOAuth } from "../google.js";
+import { parseServiceAccount, sheetIdFromUrl, appendSheetRow, explicaErroGoogle, refreshGoogleAccessToken, createGoogleContact, createGoogleDoc, appendGoogleDoc, replaceInGoogleDoc, docIdFromUrl, appendSheetRowOAuth, faltaEscopo, listCalendarEventsOAuth, createCalendarEventOAuth, convidarParaEventoOAuth, upsertSheetRow, upsertSheetRowOAuth, findGoogleContactByPhone, updateGoogleContact, readSheetRowsOAuth } from "../google.js";
 import { horariosLivres, sugereDoisHorarios, rotuloRelativo, listaNumerada, lerHorarioEscolhido, rotuloDe, dataNoFuso, partesNoFuso, type Ocupado, type Opcao } from "./agenda.js";
 import { MetaGateway } from "../gateway/meta.js";
 import { UazapiGateway } from "../gateway/uazapi.js";
@@ -101,7 +101,9 @@ export type Step = (
   | { type: "gsheet_read"; sheetUrl: string; aba?: string; salvarEm?: string;
       // DISPARO POR LOTES (13/10): pula linhas com valor nesta coluna (ex.: "status" já preenchido =
       // já recebeu), pega só as N primeiras que sobrarem e, com `ab`, marca {{variante}} A/B alternado.
-      pularSe?: string; limite?: number; ab?: boolean }
+      pularSe?: string; limite?: number; ab?: boolean;
+      // Só linhas cuja coluna de data (ex.: "Data da compra") caiu nas últimas N horas.
+      colunaData?: string; ultimasHoras?: number }
   // ENVIAR E-MAIL pela conta Resend do workspace (Integrações → Resend). `corpo` é texto com
   // variáveis; vira HTML simples (quebras de linha, *negrito*, links). Passo de passagem: sem
   // e-mail válido ou sem Resend configurada, loga e segue. Pedido do dono, 09/10/2026.
@@ -165,7 +167,9 @@ export type Step = (
   // número da opção, "16/09 14:30" ou ISO). Passo de passagem nos dois casos.
   // "calls_do_dia": lista as reuniões do dia (hoje ou amanhã) que o nó "criar" marcou — o telefone
   // vem da descrição ("WhatsApp: 55…") — e deixa {{calls_hoje}} (lista pro Loop) + resumo em texto.
-  | { type: "google_calendar"; acao?: "horarios" | "criar" | "calls_do_dia"; dias?: number; inicio?: string; fim?: string; duracaoMin?: number;
+  // "convidar": põe o e-mail do lead como convidado na PRÓXIMA ocorrência do evento achado pelo link
+  // do Meet (`busca`) — o Google manda o convite e lembra a pessoa no dia. {{agenda_convite}} = ok/ja_estava/erro.
+  | { type: "google_calendar"; acao?: "horarios" | "criar" | "calls_do_dia" | "convidar"; busca?: string; email?: string; dias?: number; inicio?: string; fim?: string; duracaoMin?: number;
       diasSemana?: number[]; antecedenciaMin?: number; maxOpcoes?: number; porPeriodo?: boolean;
       titulo?: string; descricao?: string; quando?: string; calendarId?: string; diaOffset?: number; salvarEm?: string; umPorDia?: boolean }
   // Salvar no Google Contatos PESSOAL do dono (People API via OAuth). `campos` opcional muda o que
@@ -849,6 +853,16 @@ async function runStep(
         if (!access) { log("❌ Agenda Google: conta Google não conectada (Integrações → Conectar o Google)"); break; }
         const cal = String(step.calendarId ?? "").trim() || "primary";
         const agora = new Date();
+        if (step.acao === "convidar") {
+          const email = render(String(step.email ?? "{{email}}"), ev, fields).trim();
+          const busca = render(String(step.busca ?? ""), ev, fields).trim();
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { fields.agenda_convite = "sem_email"; log(`📅 Agenda (convidar): lead sem e-mail válido ("${email.slice(0, 40)}") — pulado`); break; }
+          if (!busca) { fields.agenda_convite = "erro"; log("❌ Agenda (convidar): informe o link do Meet (ou um trecho do título) do evento"); break; }
+          const r = await convidarParaEventoOAuth(access, cal, busca, email, Math.min(60, Math.max(1, Number(step.dias) || 14)));
+          fields.agenda_convite = r.status === "convidado" ? "ok" : "ja_estava";
+          log(`📅 Agenda: ${email.replace(/(.{2}).*@/, "$1***@")} ${r.status === "convidado" ? "convidado(a)" : "já estava convidado(a)"} em "${r.titulo.slice(0, 50)}" (${r.inicio})`);
+          break;
+        }
         if ((step.acao ?? "horarios") === "horarios") {
           const dias = Math.min(30, Math.max(1, Number(step.dias) || 5));
           const ate = new Date(agora.getTime() + (dias + 1) * 86400000);
@@ -1316,6 +1330,22 @@ async function runStep(
         let unicos: Array<Record<string, string>> = itens.filter((i) => { if (!i.telefone) return true; if (vistos.has(i.telefone)) return false; vistos.add(i.telefone); return true; });
         const colPula = String(step.pularSe ?? "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
         if (colPula) { const antes = unicos.length; unicos = unicos.filter((i) => !String(i[colPula] ?? "").trim()); log(`📗 ler planilha: ${antes - unicos.length} linha(s) já com "${colPula}" preenchido — puladas`); }
+        // SÓ QUEM ENTROU NAS ÚLTIMAS X HORAS (16/10/2026): a planilha de compradores acumula todas as
+        // turmas; o aviso do workshop da semana tem que ir só pra quem comprou depois do último.
+        // Lê a coluna de data no formato da planilha ("14/10/2026 09:18", fuso de Brasília).
+        const colData = String(step.colunaData ?? "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+        const horas = Number(step.ultimasHoras);
+        if (colData && horas > 0) {
+          const corte = Date.now() - horas * 3600_000;
+          const antes = unicos.length;
+          unicos = unicos.filter((i) => {
+            const m = String(i[colData] ?? "").match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\D+(\d{1,2}):(\d{2}))?/);
+            if (!m) return false;
+            const t = Date.parse(`${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}T${(m[4] ?? "00").padStart(2, "0")}:${m[5] ?? "00"}:00-03:00`);
+            return Number.isFinite(t) && t >= corte;
+          });
+          log(`📗 ler planilha: ${unicos.length} de ${antes} linha(s) com "${colData}" nas últimas ${horas} h`);
+        }
         if (Number(step.limite) > 0) unicos = unicos.slice(0, Math.round(Number(step.limite)));
         if (step.ab) unicos = unicos.map((i, idx) => ({ ...i, variante: idx % 2 === 0 ? "A" : "B" }));
         fields[`${prefixo}_data`] = JSON.stringify(unicos).slice(0, 100_000);

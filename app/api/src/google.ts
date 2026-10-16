@@ -405,6 +405,47 @@ export async function createCalendarEventOAuth(
   return { link: String(j?.htmlLink ?? "") };
 }
 
+/** CONVIDAR PRO EVENTO (16/10/2026): acha a PRÓXIMA ocorrência de um evento (recorrente ou não)
+ *  pelo link do Meet (ou por um trecho do título) e põe o e-mail na lista de convidados dessa
+ *  ocorrência, com sendUpdates=all — o Google manda o convite e o lembrete pro convidado. Só a
+ *  ocorrência da data (não a série inteira): quem compra pra este sábado não vira convidado de
+ *  todos os sábados. Já convidado = não duplica, não reenvia. */
+export async function convidarParaEventoOAuth(
+  accessToken: string, calendarId: string, busca: string, email: string, diasAFrente = 14,
+): Promise<{ status: "convidado" | "ja_estava"; titulo: string; inicio: string; link: string }> {
+  const cal = encodeURIComponent(calendarId || "primary");
+  const agora = new Date();
+  const q = new URLSearchParams({
+    timeMin: new Date(agora.getTime() - 3 * 3600_000).toISOString(), // evento em andamento ainda vale
+    timeMax: new Date(agora.getTime() + diasAFrente * 86400_000).toISOString(),
+    singleEvents: "true", orderBy: "startTime", maxResults: "250",
+    fields: "items(id,status,summary,start,end,hangoutLink,htmlLink,attendees,conferenceData/entryPoints)",
+  });
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${cal}/events?${q}`, { headers: { authorization: "Bearer " + accessToken } });
+  const j: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw erroGoogle("Google Agenda", res.status, j);
+  const alvo = busca.trim().toLowerCase();
+  const codigo = (alvo.match(/[a-z]{3}-[a-z]{4}-[a-z]{3}/) ?? [""])[0]; // sua-sala
+  const casa = (it: any) => {
+    const links = [String(it?.hangoutLink ?? ""), ...((it?.conferenceData?.entryPoints ?? []).map((e: any) => String(e?.uri ?? "")))].join(" ").toLowerCase();
+    if (codigo) return links.includes(codigo);
+    return String(it?.summary ?? "").toLowerCase().includes(alvo);
+  };
+  const ev = (j?.items ?? []).find((it: any) => it?.status !== "cancelled" && casa(it) && new Date(it?.end?.dateTime ?? it?.end?.date ?? 0) > agora);
+  if (!ev) throw new Error(`não achei evento com "${busca.slice(0, 60)}" nos próximos ${diasAFrente} dias nesta agenda`);
+  const lista: any[] = Array.isArray(ev.attendees) ? ev.attendees : [];
+  const base = { titulo: String(ev.summary ?? ""), inicio: String(ev.start?.dateTime ?? ev.start?.date ?? ""), link: String(ev.htmlLink ?? "") };
+  if (lista.some((a) => String(a?.email ?? "").toLowerCase() === email.toLowerCase())) return { status: "ja_estava", ...base };
+  const pr = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${cal}/events/${encodeURIComponent(ev.id)}?sendUpdates=all`, {
+    method: "PATCH",
+    headers: { authorization: "Bearer " + accessToken, "content-type": "application/json" },
+    body: JSON.stringify({ attendees: [...lista, { email }] }),
+  });
+  const pj: any = await pr.json().catch(() => ({}));
+  if (!pr.ok) throw erroGoogle("Google Agenda", pr.status, pj);
+  return { status: "convidado", ...base };
+}
+
 /** Eventos entre duas datas, já expandindo os recorrentes. É a base do "horários livres": o
  *  escopo `calendar.events` que já pedimos LÊ eventos — mas NÃO permite o endpoint freeBusy
  *  (esse exige calendar.readonly/calendar.freebusy), então a conta é feita aqui em cima da lista.

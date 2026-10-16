@@ -1082,7 +1082,9 @@ export function OficialInbox() {
                 onEnviar={(leg) => void enviaAnexo(anexoPend, leg)} onCancelar={() => setAnexoPend(null)} />
             )}
             {respondendo && (
-              <div className="reply-bar" style={{ margin: "0 12px 6px" }}>
+              /* flex: none — o .reply-bar nasceu pro compositor do Lite (linha com wrap, base 100%); aqui o pai é
+                 COLUNA e a mesma base virava ALTURA: o quadro "Respondendo" engolia a conversa (print 16/10). */
+              <div className="reply-bar" style={{ margin: "0 12px 6px", flex: "none" }}>
                 <div className="reply-corpo">
                   <b>{respondendo.from_me ? t("inbox.voce") : (respondendo.sender_name || t("inbox.cliente"))}</b>
                   <span>{resumoCitacao(respondendo)}</span>

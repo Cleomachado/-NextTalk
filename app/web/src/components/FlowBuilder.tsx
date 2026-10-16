@@ -5466,6 +5466,15 @@ function LerPlanilhaEditor({ step, onChange }: { step: Extract<Step, { type: "gs
         <input className="inp" value={s.pularSe ?? ""} placeholder="status" onChange={(e) => onChange({ ...s, pularSe: e.target.value })} />
       </div>
       <div className="field">
+        <label>Só quem entrou nas últimas horas (opcional)</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input className="inp" style={{ flex: 2 }} value={s.colunaData ?? ""} placeholder="coluna de data (ex.: Data da compra)" onChange={(e) => onChange({ ...s, colunaData: e.target.value || undefined })} />
+          <input className="inp" style={{ flex: 1 }} type="number" min={0} value={s.ultimasHoras ?? ""} placeholder="horas"
+            onChange={(e) => onChange({ ...s, ultimasHoras: e.target.value ? Number(e.target.value) : undefined })} />
+        </div>
+        <div className="muted" style={{ fontSize: 11.5 }}>Ex.: aviso de sexta 18h só pra quem comprou desde o sábado anterior = 150 horas. A data precisa estar como 14/10/2026 09:18.</div>
+      </div>
+      <div className="field">
         <label>Pegar no máximo (linhas por execução)</label>
         <input className="inp" type="number" min={0} value={s.limite ?? ""} placeholder="vazio = todas"
           onChange={(e) => onChange({ ...s, limite: e.target.value ? Math.max(0, Number(e.target.value)) : undefined })} />
@@ -6762,13 +6771,26 @@ function StepEditor({
           </div>
           <div className="field">
             <label>O que fazer</label>
-            <select className="inp" value={s.acao ?? "horarios"} onChange={(e) => onChange({ ...s, acao: e.target.value as "horarios" | "criar" | "calls_do_dia" })}>
+            <select className="inp" value={s.acao ?? "horarios"} onChange={(e) => onChange({ ...s, acao: e.target.value as "horarios" | "criar" | "calls_do_dia" | "convidar" })}>
               <option value="horarios">Buscar horários livres na minha agenda</option>
               <option value="criar">Marcar a reunião no horário que o lead escolheu</option>
               <option value="calls_do_dia">Listar as calls do dia (pra lembrete e confirmação)</option>
+              <option value="convidar">Convidar o lead pra um evento (ex.: aula, workshop)</option>
             </select>
           </div>
-          {s.acao === "calls_do_dia" ? (
+          {s.acao === "convidar" ? (
+            <>
+              <div className="ask-note">
+                Acha a <b>próxima ocorrência</b> do evento na sua agenda e põe o e-mail do lead como convidado. O Google
+                manda o convite por e-mail e lembra a pessoa no dia. Evento semanal: entra só a data mais próxima.
+              </div>
+              <div className="field"><label>Link do Meet do evento (ou um trecho do título)</label>
+                <input className="inp" value={s.busca ?? ""} placeholder="https://meet.google.com/SUA-SALA" onChange={(e) => onChange({ ...s, busca: e.target.value })} /></div>
+              <div className="field"><label>E-mail do convidado</label>
+                <input className="inp" value={s.email ?? ""} placeholder="{{email}}" onChange={(e) => onChange({ ...s, email: e.target.value || undefined })} /></div>
+              <div className="muted" style={{ fontSize: 11.5 }}>Cria <code>{"{{agenda_convite}}"}</code> = ok, ja_estava ou sem_email. Precisa do Google conectado em Integrações.</div>
+            </>
+          ) : s.acao === "calls_do_dia" ? (
             <>
               <div className="ask-note">
                 Lê as reuniões que o modo <i>Marcar</i> criou (o telefone do lead fica na descrição do evento) e

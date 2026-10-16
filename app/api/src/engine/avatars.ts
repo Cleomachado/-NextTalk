@@ -95,7 +95,7 @@ export async function enrichAvatars(opts: {
 }
 
 // Baixa (URL ou data:base64) e hospeda no /media, devolvendo a URL pública persistente.
-async function hostImage(src: string, mediaBase: string, wsId?: string): Promise<string | null> {
+export async function hostImage(src: string, mediaBase: string, wsId?: string): Promise<string | null> {
   let buf: Buffer;
   let mime = "image/jpeg";
   if (src.startsWith("data:")) {
@@ -133,4 +133,42 @@ export function scheduleEnrich(run: () => unknown, delayMs = 8000): void {
     pending = false;
     Promise.resolve(run()).catch(() => {});
   }, delayMs);
+}
+
+// 📷 FOTO DOS LEADS DA API OFICIAL (16/10/2026). A Cloud API não entrega foto de perfil, mas o
+// /chat/details da UazAPI devolve a foto de QUALQUER número (confirmado ao vivo com um lead que nunca
+// falou com o Lite). Usa o número Lite DO PRÓPRIO workspace — nunca o de outro (dado de cliente não
+// passa pela instância da plataforma). Grava em chat_avatars (por conversa). Só quem já ESCREVEU na
+// API, os mais recentes primeiro, `limite` por rodada, 1,5 s entre consultas; sem foto (ou privacidade
+// fechada) → nova tentativa em 2 dias.
+export async function enrichAvatarsOficial(opts: { uazUrl: string; token: string; mediaBase: string; wsId: string; limite?: number }): Promise<number> {
+  const { query } = await import("../db.js");
+  const lista = await query<{ chat_id: string }>(
+    `SELECT m.chat_id FROM inbox_messages m
+      LEFT JOIN chat_avatars av ON av.workspace_id=m.workspace_id AND av.chat_id=m.chat_id
+      LEFT JOIN contacts c ON c.workspace_id=m.workspace_id AND c.phone=m.chat_id
+      WHERE m.workspace_id=$1 AND m.account LIKE 'meta-%' AND NOT m.from_me
+        AND c.avatar_url IS NULL AND av.url IS NULL
+        AND (av.tentado_em IS NULL OR av.tentado_em < now() - interval '2 days')
+      GROUP BY m.chat_id ORDER BY max(m.ts) DESC NULLS LAST LIMIT $2`, [opts.wsId, opts.limite ?? 25]).catch(() => [] as Array<{ chat_id: string }>);
+  let salvas = 0;
+  for (const { chat_id } of lista) {
+    let url: string | null = null;
+    try {
+      const r = await fetch(opts.uazUrl + "/chat/details", {
+        method: "POST", headers: { "content-type": "application/json", token: opts.token },
+        body: JSON.stringify({ number: chat_id.replace(/@.*/, ""), preview: false }), signal: AbortSignal.timeout(10_000),
+      });
+      const j: any = await r.json().catch(() => ({}));
+      const img = String(j?.image || j?.imagePreview || "");
+      if (r.ok && img) url = await hostImage(img, opts.mediaBase, opts.wsId);
+    } catch { /* tenta de novo daqui a 2 dias */ }
+    await query(
+      `INSERT INTO chat_avatars(workspace_id, chat_id, url, tentado_em) VALUES($1,$2,$3,now())
+       ON CONFLICT (workspace_id, chat_id) DO UPDATE SET url=COALESCE(EXCLUDED.url, chat_avatars.url), tentado_em=now()`,
+      [opts.wsId, chat_id, url]).catch(() => {});
+    if (url) salvas++;
+    await new Promise((ok) => setTimeout(ok, 1500));
+  }
+  return salvas;
 }
