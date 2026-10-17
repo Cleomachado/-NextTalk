@@ -646,6 +646,18 @@ export async function initSchema(): Promise<void> {
       created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS contact_docs_ws_phone_idx    ON contact_docs(workspace_id, phone);
+    -- Sugestões da página Novidades (17/10/2026): guardadas aqui e avisadas no WhatsApp do dono
+    -- pelo fluxo "fluxo-sugestoes-novidades" do workspace principal.
+    CREATE TABLE IF NOT EXISTS sugestoes (
+      id           BIGSERIAL PRIMARY KEY,
+      workspace_id TEXT,
+      user_id      TEXT,
+      nome         TEXT,
+      email        TEXT,
+      telefone     TEXT,
+      texto        TEXT NOT NULL,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
     -- 1 workspace por dono: sem isto, 2 webhooks concorrentes do MESMO comprador criavam 2 workspaces
     -- (getSession pegava um arbitrário; refund cancelava só um → comprador estornado mantinha acesso).
     CREATE UNIQUE INDEX IF NOT EXISTS workspaces_owner_uniq ON workspaces(owner_user_id);

@@ -467,7 +467,7 @@ const pedMedio = (pedidos: number, ticket: number, brl: (v: number) => string) =
 const limpaSeparadores = (s: string) => s.split("|").map((x) => x.trim()).filter(Boolean).join(" | ");
 
 // null = não conectado — quem chama loga e SEGUE o fluxo (conector nunca derruba conversa).
-async function tokenGoogleDoWorkspace(): Promise<string | null> {
+export async function tokenGoogleDoWorkspace(): Promise<string | null> {
   const g = getCachedFor<{ enc?: string }>(getCurrentWorkspace(), "google-contacts-oauth");
   const refresh = g?.enc ? decryptSecret(g.enc) : null;
   if (!refresh || !config.googleOAuth.clientId || !config.googleOAuth.clientSecret) return null;
@@ -1866,7 +1866,14 @@ async function runFromNode(
       }
 
       const limite = Math.max(1, Math.min(TETO_DURO, Math.round(Number(step.limite) || 50)));
-      const intervalo = Math.max(1000, Math.round(Number(step.intervaloMs) || 8000));
+      // ⏱️ Número LITE (API não oficial) nunca dispara mais rápido que 1 pessoa a cada 5 s, mesmo que o nó
+      // peça menos — rajada no mesmo segundo é o que derruba número não oficial (pedido do dono, 16/10/2026).
+      // A API Oficial aceita o intervalo configurado, inclusive 0 (todos de uma vez).
+      const ehOficial = gw instanceof MetaGateway;
+      // 0 é válido (Oficial dispara todos juntos); só campo vazio cai no padrão de 8 s.
+      const pedido = step.intervaloMs === undefined || step.intervaloMs === null || (step.intervaloMs as any) === "" ? 8000 : Number(step.intervaloMs);
+      const intervalo = Math.max(ehOficial ? 0 : 5000, Math.round(Number.isFinite(pedido) ? pedido : 8000));
+      if (!ehOficial && Number.isFinite(pedido) && pedido < 5000) log(`⏱️ loop: número Lite — intervalo subiu de ${Number(step.intervaloMs)} ms pra 5000 ms (proteção contra bloqueio)`);
       const campoTel = String(step.campoTelefone ?? "telefone").trim();
       const usados = itens.slice(0, limite);
       if (itens.length > limite) log(`🔁 loop: a lista tem ${itens.length} itens e o limite deste nó é ${limite} — os demais NÃO foram disparados`);

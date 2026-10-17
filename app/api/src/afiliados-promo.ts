@@ -413,7 +413,7 @@ export async function renderPromo(p: PromoRow): Promise<string> {
     }
     html = html.split(o.oficial).join(dele);
   }
-  // A página vive em /promo/<slug> — asset relativo ("michelzao.jpg", 'sounds/…') resolveria
+  // A página vive em /promo/<slug> — asset relativo ("foto.jpg", 'sounds/…') resolveria
   // pra /promo/… e daria 404. Vira absoluto, que o nginx do site serve normal.
   html = html.replace(/src="(?!https?:|\/|data:)/g, 'src="/');
   html = html.replace(/new Audio\('(?!https?:|\/)/g, "new Audio('/");

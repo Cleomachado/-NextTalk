@@ -6421,8 +6421,9 @@ function StepEditor({
             </div>
             <div className="field" style={{ flex: 1 }}>
               <label>Intervalo entre eles (s)</label>
-              <input className="inp" type="number" min={1} max={600} value={Math.round((s.intervaloMs ?? 8000) / 1000)}
-                onChange={(e) => onChange({ ...s, intervaloMs: Math.max(1, Math.min(600, Number(e.target.value) || 1)) * 1000 })} />
+              <input className="inp" type="number" min={0} max={600} value={Math.round((s.intervaloMs ?? 8000) / 1000)}
+                onChange={(e) => onChange({ ...s, intervaloMs: Math.max(0, Math.min(600, Number(e.target.value) || 0)) * 1000 })} />
+              <div className="muted" style={{ fontSize: 11 }}>API Oficial aceita 0. Número Lite usa no mínimo 5 s, mesmo que você ponha menos.</div>
             </div>
           </div>
           <div className="ask-warn">

@@ -8,7 +8,7 @@ import type { WhatsAppGateway } from "./gateway/types.js";
 import { loadAutomations, loadSeedAutomations } from "./automations.js";
 import { TERMOS_VERSAO, hashTermos, pacoteTermos } from "./termos.js";
 import type { Automation } from "./engine/runner.js";
-import { runAutomationsFor, resumeCapture, resumeAgentTurn, resumeScheduledFlow, resumeButtonBranch, BUTTON_VAR, produtoCasa, executarPassoDoFluxo } from "./engine/runner.js";
+import { tokenGoogleDoWorkspace, runAutomationsFor, resumeCapture, resumeAgentTurn, resumeScheduledFlow, resumeButtonBranch, BUTTON_VAR, produtoCasa, executarPassoDoFluxo } from "./engine/runner.js";
 import { toGraph, saidaPadrao, hasHandleEdge, nextNodeId } from "./engine/graph.js";
 import { transcribeAudio, transcribeAudioBuf, describeImage } from "./engine/ai.js";
 import { enrichAvatars, enrichAvatarsOficial, scheduleEnrich, syncLiteContacts } from "./engine/avatars.js";
@@ -56,7 +56,7 @@ import { runWithWorkspace, getCurrentWorkspace, getCurrentInstanceToken } from "
 import { perfilDoWorkspace, salvarPerfil, estadoAdvocacia, salvarConfig as salvarConfigAdvocacia, removerConfig as removerConfigAdvocacia, extrairDados as extrairDadosContrato, gerarContrato, statusContrato } from "./advocacia.js";
 import { ESPERA_RAJADA_MS, acumuloSeg, janelaRajada, falaComCitacao } from "./engine/acumulo.js";
 import { marcaOrigemEnvio, origemDoEnvio, marcaAutorEnvio, autorDoEnvio, envioNossoRecente, envioEmCurso, classificaPropria, ehRespostaAutomaticaWa } from "./engine/origem-envio.js";
-import { parseServiceAccount, sheetIdFromUrl, appendSheetRow, createCalendarEvent, explicaErroGoogle, googleOAuthUrl, exchangeGoogleCode, googleUserEmail, refreshGoogleAccessToken, createGoogleContact, createGoogleDoc, createSheetOAuth, appendSheetRowOAuth, createCalendarEventOAuth, faltaEscopo, SCOPE_CONTACTS, readSheetHeaderOAuth, readSheetHeader } from "./google.js";
+import { parseServiceAccount, sheetIdFromUrl, appendSheetRow, createCalendarEvent, explicaErroGoogle, googleOAuthUrl, exchangeGoogleCode, googleUserEmail, refreshGoogleAccessToken, createGoogleContact, createGoogleDoc, createSheetOAuth, appendSheetRowOAuth, createCalendarEventOAuth, convidarParaEventoOAuth, faltaEscopo, SCOPE_CONTACTS, readSheetHeaderOAuth, readSheetHeader } from "./google.js";
 import { encryptSecret, decryptSecret } from "./crypto.js";
 import { rotaLiberada, AREAS_PERMISSAO, normalizaPermissoes, setMemberPermissions, listTeam, inviteMember, getInvite, acceptInvite, removeMember, setMemberRole, revokeInvite } from "./team.js";
 import { getBoard, createStage, updateStage, deleteStage, reorderStages, moveCard, updateCard, createCard } from "./crm.js";
@@ -1475,10 +1475,18 @@ async function processInbound(
     // ✋ O dono assumiu esta conversa pelo celular → o robô fica DE FORA (nem agente, nem captura,
     // nem keyword) até a pausa expirar. A mensagem já foi salva no CRM; sem ✓✓ azul de propósito —
     // quem está lendo é o dono, no ritmo dele.
-    if (botPausado(phone)) {
+    // Exceção (16/10/2026): fluxo marcado "furaPausa" cuja palavra-chave EXATA o lead mandou (ex.: a frase
+    // pronta do botão "Entrar no Grupo de Avisos" da página de obrigado) roda mesmo com a pausa — é um
+    // pedido explícito do lead, não conversa solta no meio do atendimento humano.
+    const textoExato = String(msg.text ?? "").trim().toLowerCase();
+    const furaPausa = !!textoExato && loadAutomations().some((a: any) => a.enabled !== false && a.furaPausa === true
+      && a.trigger === "keyword" && fluxoNoNumero(a, contaDoInbound(platform))
+      && String(a.keyword ?? "").split(",").map((w: string) => w.trim().toLowerCase()).filter(Boolean).includes(textoExato));
+    if (botPausado(phone) && !furaPausa) {
       pushInbound({ from: phone, name: msg.name, text: (msg.text || "(mídia)").slice(0, 80), fromMe: false, blocked: "dono-assumiu" });
       return;
     }
+    if (furaPausa && botPausado(phone)) console.log(`🔓 palavra-chave "${textoExato.slice(0, 40)}" furou a pausa da IA · ${phone}`);
     // 🏠 Mensagem vinda de OUTRO número desta mesma conta = conversa interna da equipe: nada de fluxo/IA.
     if ((await numerosDaConta(getCurrentWorkspace()).catch(() => new Set<string>())).has(chaveTel(phone))) {
       pushInbound({ from: phone, name: msg.name, text: (msg.text || "(mídia)").slice(0, 80), fromMe: false, blocked: "numero-da-conta" });
@@ -5129,6 +5137,59 @@ app.post("/app/atendente/assumir", async (req, reply) => {
   const ws = await clientWs(req, reply); if (!ws) return;
   return atendenteAssumeHandler(ws, req.body, reply);
 });
+
+// 📝 SUGESTÕES (pedido do dono, 17/10/2026): caixa "Envie sua sugestão" na página Novidades, pra
+// QUALQUER conta (admin e cliente). A sugestão fica guardada na tabela `sugestoes` e dispara, no
+// workspace PRINCIPAL (é feedback do produto, vai pro dono do ZapConverte), o fluxo
+// "fluxo-sugestoes-novidades" — que avisa o dono no WhatsApp com nome, telefone, e-mail e o texto
+// ({{nome}}, {{telefone}}, {{email}}, {{sugestao}}, {{conta}}). Fluxo desligado = só guarda.
+const FLUXO_SUGESTOES = "fluxo-sugestoes-novidades";
+async function sugestaoHandler(req: any, reply: any) {
+  const s = await sessionOf(req);
+  if (!s) return reply.code(401).send({ error: "não autenticado" });
+  if (rateLimited("sugestao:" + s.user.id, 6, 3_600_000)) return reply.code(429).send({ error: "você já mandou várias sugestões nesta hora — tente de novo daqui a pouco" });
+  const b = (req.body ?? {}) as any;
+  const texto = String(b.texto ?? "").trim().slice(0, 2000);
+  const nome = String(b.nome ?? s.user.name ?? "").trim().slice(0, 80);
+  const email = String(b.email ?? s.user.email ?? "").trim().slice(0, 120);
+  const telefone = String(b.telefone ?? "").replace(/\D/g, "").slice(0, 15);
+  if (texto.length < 3) return reply.code(400).send({ error: "escreva a sua sugestão" });
+  if (telefone.length < 10) return reply.code(400).send({ error: "informe o seu WhatsApp com DDD" });
+  const conta = String(s.workspace?.name ?? "");
+  await query(
+    "INSERT INTO sugestoes(workspace_id, user_id, nome, email, telefone, texto) VALUES($1,$2,$3,$4,$5,$6)",
+    [s.workspace?.id ?? null, s.user.id, nome, email, telefone, texto],
+  ).catch((e: any) => console.error("sugestão: falha ao gravar:", e?.message));
+  reply.send({ ok: true });
+  const prim = getPrimaryWorkspace();
+  setImmediate(() =>
+    runWithWorkspace(prim, async () => {
+      try {
+        const fluxo: any = loadAutomations().find((a: any) => a.id === FLUXO_SUGESTOES);
+        if (!fluxo || fluxo.enabled === false) { console.log(`📝 sugestão de ${nome} (${conta}) guardada — fluxo "${FLUXO_SUGESTOES}" desligado, ninguém foi avisado`); return; }
+        const gw = gatewayDoWorkspace(prim, String(fluxo.conta ?? "").trim() || undefined);
+        if (!gw) { console.error("📝 sugestão guardada, mas o workspace principal está sem número conectado"); return; }
+        const ev: NormalizedEvent = {
+          platform: "webhook",
+          event: "webhook",
+          eventId: "sug-" + Date.now() + "-" + telefone,
+          contact: { name: nome || telefone, firstName: nome.split(" ")[0] || "", phone: telefone },
+          fields: { nome, telefone, email, sugestao: texto, conta },
+          raw: {},
+        };
+        console.log(`📝 sugestão de ${nome} (${conta}) → fluxo "${FLUXO_SUGESTOES}"`);
+        await runAutomationsFor(ev, gw, [fluxo], console.log, true);
+      } catch (e: any) {
+        console.error("sugestão: fluxo falhou:", e?.message ?? e);
+      }
+    }),
+  );
+}
+app.post("/admin/sugestao", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  return sugestaoHandler(req, reply);
+});
+app.post("/app/sugestao", sugestaoHandler);
 app.post("/admin/automations/teste-ao-vivo", async (req, reply) => {
   if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
   return testeAoVivoHandler(getPrimaryWorkspace(), req.body, reply);
@@ -10379,6 +10440,31 @@ app.post("/public/workshop/sessao", LIMITE_ANONIMO, async (req, reply) => {
 // InitiateCheckout, AddPaymentInfo e Purchase são da KIWIFY (pixel dela, no checkout) — decisão do
 // Admin em 12/10/2026. A página manda só o CLIQUE no botão, com nome próprio, pra não contar dobrado.
 const EVENTOS_LANDING = new Set(["PageView", "ViewContent", "CliqueCheckout", "Lead"]);
+// 📅 "ADICIONAR À MINHA AGENDA" da página de obrigado (16/10/2026). O link de modelo do Google Agenda
+// sempre abre a tela de EDIÇÃO; o caminho de 1 clique é convidar o e-mail no evento: ele entra direto na
+// agenda da pessoa (Gmail adiciona sozinho) e o Google manda o convite. Evento FIXO no servidor (o link do
+// Meet do workshop) — a página não escolhe evento, então ninguém usa isto pra convidar gente pra outra
+// reunião do dono. Limite por IP. Só a próxima data do evento semanal.
+const MEET_WORKSHOP = "https://meet.google.com/SUA-SALA";
+app.post("/public/workshop/agenda", LIMITE_ANONIMO, async (req, reply) => {
+  const ip = clientIp(req);
+  if (rateLimited("ws-agenda:" + ip, 6, 60 * 60_000)) return reply.code(429).send({ error: "Muitas tentativas. Tente de novo daqui a pouco." });
+  const email = String((req.body as any)?.email ?? "").trim().toLowerCase().slice(0, 120);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return reply.code(400).send({ error: "Confira o e-mail digitado." });
+  return runWithWorkspace(getPrimaryWorkspace(), async () => {
+    try {
+      const access = await tokenGoogleDoWorkspace();
+      if (!access) return reply.code(424).send({ error: "Agenda indisponível agora. Use o link do Google Agenda logo abaixo." });
+      const r = await convidarParaEventoOAuth(access, "primary", MEET_WORKSHOP, email, 8);
+      console.log(`📅 página de obrigado: ${email.replace(/(.{2}).*@/, "$1***@")} ${r.status === "convidado" ? "adicionado(a)" : "já estava"} em "${r.titulo.slice(0, 40)}"`);
+      return reply.send({ ok: true, status: r.status, inicio: r.inicio });
+    } catch (e: any) {
+      console.error("página de obrigado (agenda):", String(e?.message ?? e).slice(0, 200));
+      return reply.code(424).send({ error: faltaEscopo(e) ? "Agenda indisponível agora. Use o link do Google Agenda logo abaixo." : "Não consegui adicionar agora. Use o link do Google Agenda logo abaixo." });
+    }
+  });
+});
+
 app.post("/public/workshop/evento", LIMITE_ANONIMO, async (req, reply) => {
   const b = (req.body ?? {}) as any;
   const evento = String(b?.evento ?? "").trim();

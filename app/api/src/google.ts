@@ -439,7 +439,8 @@ export async function convidarParaEventoOAuth(
   const pr = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${cal}/events/${encodeURIComponent(ev.id)}?sendUpdates=all`, {
     method: "PATCH",
     headers: { authorization: "Bearer " + accessToken, "content-type": "application/json" },
-    body: JSON.stringify({ attendees: [...lista, { email }] }),
+    // guestsCanSeeOtherGuests=false: com dezenas de compradores convidados, ninguém vê o e-mail dos outros (LGPD).
+    body: JSON.stringify({ attendees: [...lista, { email }], guestsCanSeeOtherGuests: false }),
   });
   const pj: any = await pr.json().catch(() => ({}));
   if (!pr.ok) throw erroGoogle("Google Agenda", pr.status, pj);
