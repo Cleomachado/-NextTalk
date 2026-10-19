@@ -158,13 +158,14 @@ export interface LinhaAdsDia {
   data: string; campanha: string; campanhaId: string; objetivo: string;
   gasto: number; impressoes: number; alcance: number; ctrLink: number | null;
   lpv: number; ic: number; compras: number; valor: number; conversas: number;
+  cliques: number; video3s: number; thruplay: number;   // hook rate = 3 s ÷ impressões; hold = ThruPlay ÷ 3 s
 }
 export async function insightsDiariosPorCampanha(cfg: CfgMetaAds, desde: string, ate: string): Promise<LinhaAdsDia[]> {
   const out: LinhaAdsDia[] = [];
   const range = encodeURIComponent(JSON.stringify({ since: desde, until: ate }));
   let url: string | null =
     `/${cfg.actId}/insights?level=campaign&time_increment=1&time_range=${range}` +
-    `&fields=campaign_name,campaign_id,objective,spend,impressions,reach,inline_link_click_ctr,actions,action_values&limit=200`;
+    `&fields=campaign_name,campaign_id,objective,spend,impressions,reach,inline_link_click_ctr,inline_link_clicks,video_thruplay_watched_actions,actions,action_values&limit=200`;
   for (let pagina = 0; url && pagina < 10; pagina++) {
     const r: any = await graphGet(url, cfg.token);
     for (const c of r?.data ?? []) {
@@ -178,11 +179,79 @@ export async function insightsDiariosPorCampanha(cfg: CfgMetaAds, desde: string,
         compras: somaAction(c.actions, ["offsite_conversion.fb_pixel_purchase"]) || somaAction(c.actions, ["purchase"]),
         valor: somaAction(c.action_values, ["offsite_conversion.fb_pixel_purchase"]) || somaAction(c.action_values, ["purchase"]),
         conversas: somaAction(c.actions, ACT_CONVERSA),
+        cliques: num(c.inline_link_clicks),
+        video3s: somaAction(c.actions, ["video_view"]),
+        thruplay: somaAction(c.video_thruplay_watched_actions, ["video_view"]),
       });
     }
     const prox = String(r?.paging?.next ?? "");
     url = prox ? prox.replace(GRAPH, "").replace(/([?&])access_token=[^&]*/, "$1").replace(/[?&]$/, "") : null;
     if (url && !url.startsWith("/")) url = null;
+  }
+  return out;
+}
+
+// 🏆 RANKING DE CRIATIVOS (18/10): as mesmas métricas, mas por ANÚNCIO (level=ad) — o criativo é o
+// anúncio. A venda real casa com o anúncio pelo ad_id da sessão da página (checkout_sessions) ou,
+// sem ele, pelo utm_content = nome do anúncio.
+export interface LinhaAnuncioDia {
+  data: string; adId: string; adNome: string; conjunto: string; campanha: string;
+  gasto: number; impressoes: number; alcance: number; cliques: number; lpv: number; ic: number;
+  compras: number; valor: number; video3s: number; thruplay: number;
+}
+export async function insightsDiariosPorAnuncio(cfg: CfgMetaAds, desde: string, ate: string): Promise<LinhaAnuncioDia[]> {
+  const out: LinhaAnuncioDia[] = [];
+  const range = encodeURIComponent(JSON.stringify({ since: desde, until: ate }));
+  let url: string | null =
+    `/${cfg.actId}/insights?level=ad&time_increment=1&time_range=${range}` +
+    `&fields=ad_id,ad_name,adset_name,campaign_name,spend,impressions,reach,inline_link_clicks,video_thruplay_watched_actions,actions,action_values&limit=300`;
+  for (let pagina = 0; url && pagina < 20; pagina++) {
+    const r: any = await graphGet(url, cfg.token);
+    for (const c of r?.data ?? []) {
+      out.push({
+        data: String(c.date_start), adId: String(c.ad_id ?? ""), adNome: String(c.ad_name ?? ""),
+        conjunto: String(c.adset_name ?? ""), campanha: String(c.campaign_name ?? ""),
+        gasto: num(c.spend), impressoes: num(c.impressions), alcance: num(c.reach), cliques: num(c.inline_link_clicks),
+        lpv: somaAction(c.actions, ["landing_page_view"]),
+        ic: somaAction(c.actions, ["offsite_conversion.fb_pixel_initiate_checkout"]) || somaAction(c.actions, ["initiate_checkout"]),
+        compras: somaAction(c.actions, ["offsite_conversion.fb_pixel_purchase"]) || somaAction(c.actions, ["purchase"]),
+        valor: somaAction(c.action_values, ["offsite_conversion.fb_pixel_purchase"]) || somaAction(c.action_values, ["purchase"]),
+        video3s: somaAction(c.actions, ["video_view"]),
+        thruplay: somaAction(c.video_thruplay_watched_actions, ["video_view"]),
+      });
+    }
+    const prox = String(r?.paging?.next ?? "");
+    url = prox ? prox.replace(GRAPH, "").replace(/([?&])access_token=[^&]*/, "$1").replace(/[?&]$/, "") : null;
+    if (url && !url.startsWith("/")) url = null;
+  }
+  return out;
+}
+
+// Miniatura + link do criativo de cada anúncio (até 50 ids por chamada). A thumbnail_url da Meta é
+// assinada e EXPIRA — por isso é renovada a cada poucas horas, nunca guardada pra sempre.
+export interface CriativoAnuncio { adId: string; nome: string; status: string; thumb: string | null; imagem: string | null; videoId: string | null; link: string | null }
+export async function criativosDosAnuncios(cfg: CfgMetaAds, ids: string[]): Promise<CriativoAnuncio[]> {
+  const out: CriativoAnuncio[] = [];
+  // O "?ids=a,b,c" foi desativado pela Meta (v26+, visto em 18/10/2026): agora a busca é na lista de
+  // anúncios da PRÓPRIA conta, filtrada pelos ids do lote.
+  for (let i = 0; i < ids.length; i += 50) {
+    const lote = ids.slice(i, i + 50);
+    const campos = "id,name,effective_status,preview_shareable_link,creative.thumbnail_width(480).thumbnail_height(480){thumbnail_url,image_url,video_id,effective_object_story_id,instagram_permalink_url}";
+    const filtro = JSON.stringify([{ field: "id", operator: "IN", value: lote }]);
+    const r: any = await graphGet(`/${cfg.actId}/ads?fields=${encodeURIComponent(campos)}&filtering=${encodeURIComponent(filtro)}&limit=50`, cfg.token);
+    const porId = new Map<string, any>((r?.data ?? []).map((x: any) => [String(x.id), x]));
+    for (const id of lote) {
+      const a = porId.get(id); if (!a) continue;
+      const cr = a.creative ?? {};
+      const story = String(cr.effective_object_story_id ?? "");
+      const [pg, post] = story.split("_");
+      out.push({
+        adId: id, nome: String(a.name ?? ""), status: String(a.effective_status ?? ""),
+        thumb: cr.thumbnail_url ?? null, imagem: cr.image_url ?? null, videoId: cr.video_id ?? null,
+        // ordem: post publicado (Instagram/Facebook, toca o vídeo) → prévia compartilhável do anúncio (fb.me, abre sem login)
+        link: cr.instagram_permalink_url ?? (pg && post ? `https://www.facebook.com/${pg}/posts/${post}` : null) ?? (a.preview_shareable_link ? String(a.preview_shareable_link) : null),
+      });
+    }
   }
   return out;
 }

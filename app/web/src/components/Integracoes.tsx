@@ -26,6 +26,31 @@ function Card({ title, sub, children, soon, icon }: { title: string; sub?: strin
   );
 }
 
+// Campo de segredo JÁ SALVO (18/10/2026, pedido do dono): um input de senha vazio com placeholder
+// parecia "não tem nada aqui". Salvo → faixa "Token salvo · termina em …XXXX" + botão Trocar; o campo
+// só abre quando a pessoa quer trocar. Vale pra qualquer card que guarda token cifrado.
+function CampoSegredo({ salvo, final, rotulo = "Token", value, onChange, placeholder }: {
+  salvo: boolean; final?: string | null; rotulo?: string; value: string; onChange: (v: string) => void; placeholder: string;
+}) {
+  const [editando, setEditando] = useState(false);
+  useEffect(() => { if (salvo && !value) setEditando(false); }, [salvo]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (salvo && !editando) {
+    return (
+      <div className="segredo-salvo">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2.2" /><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" /></svg>
+        <span><b>{rotulo} salvo</b>{final ? <> · termina em <code>…{final}</code></> : null} · guardado cifrado</span>
+        <button type="button" className="btn" onClick={() => setEditando(true)}>Trocar {rotulo.toLowerCase()}</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <input className="inp" style={{ flex: 1 }} type="password" autoComplete="off" autoFocus={editando} placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value)} />
+      {salvo && <button type="button" className="btn" onClick={() => { onChange(""); setEditando(false); }}>Cancelar</button>}
+    </div>
+  );
+}
+
 // 📈 Meta Ads (métricas de campanha): credencial do nó "Métricas Meta Ads" / relatório diário.
 function MetaAdsCard() {
   const [st, setSt] = useState<any | null>(null);
@@ -49,7 +74,8 @@ function MetaAdsCard() {
       sub="O nó Métricas Meta Ads e o relatório diário de vendas puxam daqui o gasto e os resultados das suas campanhas (Click-to-WhatsApp e compra). Cole o ID da conta de anúncio e um token com a permissão ads_read.">
       <div style={{ display: "grid", gap: 8 }}>
         <input className="inp" placeholder="ID da conta de anúncio (act_…)" value={actId} onChange={(e) => setActId(e.target.value)} />
-        <input className="inp" type="password" placeholder={st?.configurado ? `Token salvo (…${st.last4 ?? ""}) — preencha só pra trocar` : "Token de acesso (ads_read)"} value={token} onChange={(e) => setToken(e.target.value)} />
+        <CampoSegredo salvo={!!st?.configurado && st?.origem !== "env"} final={st?.last4} value={token} onChange={setToken}
+          placeholder={st?.configurado ? "cole o token novo" : "Token de acesso (ads_read)"} />
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button className="btn primary" disabled={busy} onClick={salvar}>Salvar</button>
           <button className="btn" disabled={busy || !st?.configurado} onClick={testar}>Testar</button>
@@ -96,7 +122,8 @@ function CapiWhatsAppCard() {
           <input className="inp" style={{ flex: 1, minWidth: 180 }} placeholder="ID do conjunto de dados (dataset)" value={dataset} onChange={(e) => setDataset(e.target.value)} />
           <button className="btn" disabled={busy || !c?.conexaoOficial} title={c?.conexaoOficial ? "Busca (ou cria) o dataset da WABA conectada" : "conecte a API Oficial primeiro"} onClick={descobrir}>Descobrir pela conexão oficial</button>
         </div>
-        <input className="inp" type="password" placeholder={c?.temToken ? "Token salvo — preencha só pra trocar" : "Token de acesso (opcional — sem ele uso o da conexão oficial)"} value={token} onChange={(e) => setToken(e.target.value)} />
+        <CampoSegredo salvo={!!c?.temToken} final={c?.tokenLast4} value={token} onChange={setToken}
+          placeholder={c?.temToken ? "cole o token novo" : "Token de acesso (opcional — sem ele uso o da conexão oficial)"} />
         <input className="inp" placeholder="Código de teste (opcional) — ex.: TEST12345" value={testCode} onChange={(e) => setTestCode(e.target.value)} />
         {c?.testCode ? (
           <div style={{ fontSize: 12, color: "var(--warn)" }}>

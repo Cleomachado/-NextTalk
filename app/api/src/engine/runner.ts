@@ -408,7 +408,7 @@ function render(tpl: string, ev: NormalizedEvent, fields: Record<string, string>
 }
 
 // O produto do evento passa no filtro do fluxo? ID bate exato; nome basta CONTER (sem caixa) —
-// "Workshop" casa "Workshop Whatsapp API + Claude IA". Filtro vazio aceita tudo.
+// "Workshop" casa "Seu Evento". Filtro vazio aceita tudo.
 export function produtoCasa(filtros: Array<{ id?: string; nome?: string }> | undefined, produto?: { id?: string; name?: string }): boolean {
   if (!filtros?.length) return true;
   const idEv = String(produto?.id ?? "").trim();

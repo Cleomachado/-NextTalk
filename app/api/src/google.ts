@@ -411,7 +411,7 @@ export async function createCalendarEventOAuth(
  *  ocorrência da data (não a série inteira): quem compra pra este sábado não vira convidado de
  *  todos os sábados. Já convidado = não duplica, não reenvia. */
 export async function convidarParaEventoOAuth(
-  accessToken: string, calendarId: string, busca: string, email: string, diasAFrente = 14,
+  accessToken: string, calendarId: string, busca: string, email: string, diasAFrente = 14, serie = false,
 ): Promise<{ status: "convidado" | "ja_estava"; titulo: string; inicio: string; link: string }> {
   const cal = encodeURIComponent(calendarId || "primary");
   const agora = new Date();
@@ -433,10 +433,20 @@ export async function convidarParaEventoOAuth(
   };
   const ev = (j?.items ?? []).find((it: any) => it?.status !== "cancelled" && casa(it) && new Date(it?.end?.dateTime ?? it?.end?.date ?? 0) > agora);
   if (!ev) throw new Error(`não achei evento com "${busca.slice(0, 60)}" nos próximos ${diasAFrente} dias nesta agenda`);
-  const lista: any[] = Array.isArray(ev.attendees) ? ev.attendees : [];
   const base = { titulo: String(ev.summary ?? ""), inicio: String(ev.start?.dateTime ?? ev.start?.date ?? ""), link: String(ev.htmlLink ?? "") };
+  // `serie` (17/10/2026, encontros do White Label): convida na SÉRIE inteira do evento recorrente, não só
+  // na próxima ocorrência — a pessoa ganha todos os encontros na agenda de uma vez. Sem série, segue como antes.
+  let alvoId = String(ev.id);
+  let lista: any[] = Array.isArray(ev.attendees) ? ev.attendees : [];
+  if (serie && ev.recurringEventId) {
+    alvoId = String(ev.recurringEventId);
+    const mr = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${cal}/events/${encodeURIComponent(alvoId)}?fields=attendees`, { headers: { authorization: "Bearer " + accessToken } });
+    const mj: any = await mr.json().catch(() => ({}));
+    if (!mr.ok) throw erroGoogle("Google Agenda", mr.status, mj);
+    lista = Array.isArray(mj.attendees) ? mj.attendees : [];
+  }
   if (lista.some((a) => String(a?.email ?? "").toLowerCase() === email.toLowerCase())) return { status: "ja_estava", ...base };
-  const pr = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${cal}/events/${encodeURIComponent(ev.id)}?sendUpdates=all`, {
+  const pr = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${cal}/events/${encodeURIComponent(alvoId)}?sendUpdates=all`, {
     method: "PATCH",
     headers: { authorization: "Bearer " + accessToken, "content-type": "application/json" },
     // guestsCanSeeOtherGuests=false: com dezenas de compradores convidados, ninguém vê o e-mail dos outros (LGPD).

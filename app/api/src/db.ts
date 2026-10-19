@@ -290,6 +290,26 @@ export async function initSchema(): Promise<void> {
       atualizado   TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (workspace_id, data, campanha)
     );
+    -- Funil completo por turma (18/10): cliques no link, vídeo 3 s (hook) e ThruPlay (hold).
+    ALTER TABLE ads_diario ADD COLUMN IF NOT EXISTS cliques  INT NOT NULL DEFAULT 0;
+    ALTER TABLE ads_diario ADD COLUMN IF NOT EXISTS video_3s INT NOT NULL DEFAULT 0;
+    ALTER TABLE ads_diario ADD COLUMN IF NOT EXISTS thruplay INT NOT NULL DEFAULT 0;
+
+    -- 🎟️ TURMAS DO WORKSHOP (Dashboard de Lançamento, 18/10): o que a Kiwify e a Meta não sabem —
+    -- meta de vendas e comparecimento (grupo, pico na live, quem ficou até o pitch do White Label).
+    -- 1 linha por sábado de aula; vendas e gasto são calculados na hora, não ficam aqui.
+    CREATE TABLE IF NOT EXISTS ws_turmas (
+      workspace_id   TEXT NOT NULL,
+      turma          DATE NOT NULL,
+      meta_ingressos INT,
+      meta_wl        INT,
+      membros_grupo  INT,
+      pico_live      INT,
+      ficaram_pitch  INT,
+      obs            TEXT,
+      atualizado     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (workspace_id, turma)
+    );
 
     -- Pedidos APROVADOS que chegam pelo webhook de fluxo da Kiwify (ingresso + order bumps + qualquer
     -- produto): 1 linha por pedido, com o LÍQUIDO e a UTM. É o que monta o {{resumo_compra}} do
@@ -307,6 +327,74 @@ export async function initSchema(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS kiwify_pedidos_ws_phone ON kiwify_pedidos(workspace_id, phone, created_at);
     CREATE INDEX IF NOT EXISTS kiwify_pedidos_ws_email ON kiwify_pedidos(workspace_id, email, created_at);
+    -- Dashboard de Lançamento (18/10): lote (checkout_link = código do lote), Pix × cartão e o "src"
+    -- (= trk da sessão da página → checkout_sessions.landing_url, pra saber QUAL página vendeu).
+    ALTER TABLE kiwify_pedidos ADD COLUMN IF NOT EXISTS oferta    TEXT;
+    ALTER TABLE kiwify_pedidos ADD COLUMN IF NOT EXISTS pagamento TEXT;
+    ALTER TABLE kiwify_pedidos ADD COLUMN IF NOT EXISTS src       TEXT;
+    ALTER TABLE ws_turmas ADD COLUMN IF NOT EXISTS meta_investimento NUMERIC;
+    -- Gasto ACUMULADO do dia na Meta, uma foto a cada sincronização (30 min) → gráficos por hora.
+    CREATE TABLE IF NOT EXISTS ads_hora (
+      workspace_id TEXT NOT NULL,
+      ts           TIMESTAMPTZ NOT NULL,
+      data         DATE NOT NULL,
+      gasto        NUMERIC NOT NULL DEFAULT 0,
+      PRIMARY KEY (workspace_id, ts)
+    );
+    -- Nome do comprador: o Google Meet não entrega e-mail do participante, então "quem assistiu e
+    -- comprou" no Meet só fecha pelo nome.
+    ALTER TABLE kiwify_pedidos ADD COLUMN IF NOT EXISTS nome TEXT;
+
+    -- 🎥 LIVES (Google Meet / Zoom / CSV de presença) → /lancamento/live-metricas. Pitch e marcos
+    -- são marcados à mão no painel e sobrevivem à ressincronização.
+    CREATE TABLE IF NOT EXISTS lives (
+      workspace_id TEXT NOT NULL,
+      id           TEXT NOT NULL,
+      fonte        TEXT NOT NULL,
+      titulo       TEXT,
+      codigo       TEXT,
+      inicio       TIMESTAMPTZ NOT NULL,
+      fim          TIMESTAMPTZ,
+      turma        DATE,
+      pitch        TEXT,
+      marcos       JSONB,
+      sincronizado TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (workspace_id, id)
+    );
+    CREATE TABLE IF NOT EXISTS live_sessoes (
+      workspace_id TEXT NOT NULL,
+      live_id      TEXT NOT NULL,
+      pessoa       TEXT NOT NULL,
+      nome         TEXT,
+      email        TEXT,
+      entrada      TIMESTAMPTZ NOT NULL,
+      saida        TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS live_sessoes_live ON live_sessoes(workspace_id, live_id);
+    -- gravação/transcrição no Drive (link pra assistir) e nome trocado à mão (não volta a ser o da Agenda)
+    ALTER TABLE lives ADD COLUMN IF NOT EXISTS gravacoes JSONB;
+    ALTER TABLE lives ADD COLUMN IF NOT EXISTS titulo_manual BOOLEAN NOT NULL DEFAULT false;
+
+    -- 🏆 Métricas por ANÚNCIO (ranking de criativos) + miniatura/link do criativo.
+    CREATE TABLE IF NOT EXISTS ads_anuncio_diario (
+      workspace_id TEXT NOT NULL,
+      data         DATE NOT NULL,
+      ad_id        TEXT NOT NULL,
+      ad_nome      TEXT, conjunto TEXT, campanha TEXT,
+      gasto        NUMERIC NOT NULL DEFAULT 0,
+      impressoes   INT NOT NULL DEFAULT 0, alcance INT NOT NULL DEFAULT 0, cliques INT NOT NULL DEFAULT 0,
+      lpv          INT NOT NULL DEFAULT 0, ic INT NOT NULL DEFAULT 0, compras INT NOT NULL DEFAULT 0,
+      valor        NUMERIC NOT NULL DEFAULT 0, video_3s INT NOT NULL DEFAULT 0, thruplay INT NOT NULL DEFAULT 0,
+      atualizado   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (workspace_id, data, ad_id)
+    );
+    CREATE TABLE IF NOT EXISTS ads_criativos (
+      workspace_id TEXT NOT NULL,
+      ad_id        TEXT NOT NULL,
+      nome         TEXT, status TEXT, thumb TEXT, imagem TEXT, video_id TEXT, link TEXT,
+      atualizado   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (workspace_id, ad_id)
+    );
 
     -- Vendas aprovadas (dashboard financeiro): 1 linha por pedido, com o detalhamento da Kiwify.
     -- gross=bruto, kiwify_fee=taxa, producer_net=SEU líquido (my_commission), affiliate_commission=pago ao afiliado.

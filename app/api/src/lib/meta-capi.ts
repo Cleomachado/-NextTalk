@@ -43,7 +43,7 @@ export interface EventoMeta {
   fbc?: string | null;
   ip?: string | null;
   userAgent?: string | null;
-  conteudo?: string | null;       // custom_data.content_name (ex.: "Workshop WhatsApp API + Claude IA")
+  conteudo?: string | null;       // custom_data.content_name (ex.: "Seu Evento")
 }
 
 export async function enviaEventoMeta(d: EventoMeta): Promise<boolean> {

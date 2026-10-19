@@ -54,7 +54,7 @@ const NAV: NavItem[] = [
   { href: "/oficial/metricas", title: "Métricas", group: "Meta · API Oficial", mode: "api", client: true, icon: S("M3 3v18h18M7 16v-6M12 16V8M17 16v-9") },
 
   { href: "/meus-sites", title: "Meus sites", group: "Vendas & Rede", mode: "both", client: true, icon: S("M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18") },
-  { href: "/lancamento", title: "Dashboard Lançamento", badge: "admin", group: "Vendas & Rede", mode: "both", icon: S("M3 3v18h18M7 14l4-4 3 3 5-6") },
+  { href: "/lancamento", title: "Dashboard Lançamento", badge: "admin", group: "Vendas & Rede", mode: "both", icon: S("M3 3v18h18M7 14l4-4 3 3 5-6"), children: [{ href: "/lancamento", title: "Visão geral" }, { href: "/lancamento/live-metricas", title: "Métricas da live" }, { href: "/lancamento/ranking-criativos", title: "Ranking de criativos" }, { href: "/lancamento/kanban", title: "Kanban de vendas" }] },
   { href: "/vendas", title: "Vendas & Ganhos", badge: "admin", group: "Vendas & Rede", mode: "both", tour: "nav-vendas", icon: S("M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6") },
   { href: "/clientes", title: "Clientes", badge: "admin", group: "Vendas & Rede", mode: "both", icon: S("M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75") },
   { href: "/afiliados", title: "Afiliados", badge: "admin", group: "Vendas & Rede", mode: "both", icon: S("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6") },
@@ -112,6 +112,9 @@ const META: Record<string, { title: string; hint: string }> = {
   "/meus-sites": { title: "Meus sites", hint: "Sua página de vendas de afiliado — link, divulgação e edição" },
   "/novidades": { title: "Novidades", hint: "O que mudou no ZapConverte" },
   "/lancamento": { title: "Dashboard de Lançamento", hint: "Meta Ads × vendas reais da Kiwify × conversas — o funil do workshop" },
+  "/lancamento/live-metricas": { title: "Métricas da live", hint: "Presença minuto a minuto, pitch e conversão das aulas ao vivo" },
+  "/lancamento/kanban": { title: "Kanban de vendas", hint: "Cada lead da turma na coluna do passo em que está — anda sozinho" },
+  "/lancamento/ranking-criativos": { title: "Ranking de criativos", hint: "Cada anúncio com o investido e o ingresso real que ele vendeu" },
   "/vendas": { title: "Vendas & Ganhos", hint: "Seus ganhos líquidos e o que é pago aos afiliados" },
   "/clientes": { title: "Clientes", hint: "Suas contas pagantes e o status de cada assinatura" },
   "/afiliados": { title: "Afiliados", hint: "Rede, comissão recorrente e ranking" },

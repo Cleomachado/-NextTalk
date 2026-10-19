@@ -1496,16 +1496,18 @@ export async function totalArquivado(chatId: string, wsId?: string): Promise<num
 export async function registraPedidoKiwify(p: {
   orderId: string; wsId: string; phone?: string | null; email?: string | null; produto?: string | null;
   bruto?: number | null; liquido?: number | null;
-  utm?: { source?: string | null; medium?: string | null; campaign?: string | null; content?: string | null; term?: string | null } | null;
+  utm?: { source?: string | null; medium?: string | null; campaign?: string | null; content?: string | null; term?: string | null; sck?: string | null } | null;
+  oferta?: string | null; pagamento?: string | null; nome?: string | null;
 }): Promise<void> {
   if (!dbEnabled || !p.orderId) return;
   await query(
     `INSERT INTO kiwify_pedidos(order_id, workspace_id, phone, email, produto, bruto, liquido,
-                                utm_source, utm_medium, utm_campaign, utm_content, utm_term)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (order_id) DO NOTHING`,
+                                utm_source, utm_medium, utm_campaign, utm_content, utm_term, oferta, pagamento, src, nome)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT (order_id) DO NOTHING`,
     [p.orderId, p.wsId, p.phone || null, (p.email || "").trim().toLowerCase() || null, p.produto || null,
      p.bruto ?? null, p.liquido ?? null, p.utm?.source || null, p.utm?.medium || null,
-     p.utm?.campaign || null, p.utm?.content || null, p.utm?.term || null],
+     p.utm?.campaign || null, p.utm?.content || null, p.utm?.term || null,
+     p.oferta || null, p.pagamento || null, p.utm?.sck || null, (p.nome || "").trim().slice(0, 160) || null],
   ).catch(() => {});
 }
 const brl = (v: number) => "R$ " + v.toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".");

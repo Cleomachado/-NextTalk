@@ -146,6 +146,44 @@ curl https://app.seudominio.com.br/health          # deve responder ok
 - **Verifique o deploy por HTTPS, de fora.** Uma rota nova devolver 401 (existe, mas pede login) prova que a versão nova está no ar; 404 = ainda está o código antigo.
 - **Cada deploy com mudança visível gera uma entrada de "Novidades"** escrita para o cliente. Cliente que não vê novidade acha que o produto parou.
 
+### 6.1 O Claude faz o deploy por você (sem você digitar comando)
+
+No começo, cada deploy era copiar comando, colar no terminal, digitar a senha da VPS duas vezes e torcer. Hoje eu só peço "sobe isso" e o Claude Code faz tudo sozinho. O segredo não é mágica: são **três peças**.
+
+**1. O Claude Code roda no SEU computador, na pasta do projeto.**
+Ele usa o seu terminal, então pode rodar `ssh`, `rsync`, `git` e o script de deploy. ⚠️ O Claude no navegador (claude.ai) ou o ChatGPT **não conseguem**: eles não têm acesso ao seu terminal nem às suas chaves. Tem que ser o Claude Code (terminal, VS Code ou app desktop) aberto na pasta do projeto.
+
+**2. Uma chave SSH do seu computador autorizada na VPS (entra sem senha).**
+```bash
+ssh-keygen -t ed25519                  # cria a chave (Enter em tudo); fica em ~/.ssh/id_ed25519
+ssh-copy-id root@IP_DA_VPS             # copia a chave pública pra VPS (pede a senha UMA última vez)
+ssh root@IP_DA_VPS 'docker service ls' # teste: tem que entrar SEM pedir senha
+```
+Na Hostinger também dá pra colar a chave pública (`~/.ssh/id_ed25519.pub`) no hPanel, em "Chaves SSH" da VPS. Prompt pronto pro aluno: "Crie uma chave SSH no meu computador e me explique onde colar a chave pública no painel da Hostinger pra você acessar a minha VPS sem senha. Depois teste o acesso ao IP X com o usuário root."
+
+**3. Um script de deploy que faz tudo num comando só (`deploy/deploy.sh`).**
+O script: envia o código por `rsync` (sem `node_modules`), confere que o código novo chegou, gera as imagens com **tag única**, roda `docker stack deploy` e verifica por HTTPS se a versão nova respondeu. Os segredos ficam no `deploy/.env` (no computador e na VPS), nunca no código e nunca no chat. Com isso, o Claude só precisa rodar `bash deploy/deploy.sh`.
+
+**O ritual que eu ensino o Claude a seguir em todo deploy** (vira regra na memória dele):
+1. Typecheck e build passando, conferidos pelo **código de saída**.
+2. **Commit** antes de publicar.
+3. Conferir se **não tem disparo programado** pros próximos minutos (o deploy reinicia o motor e mataria a fila no meio).
+4. `bash deploy/deploy.sh`.
+5. Esperar ~35 s e **conferir por HTTPS, de fora**.
+6. **Push pro GitHub** lendo o token do `.env` dentro do próprio comando, sem mostrar o token: `GT=$(grep '^GITHUB_TOKEN=' deploy/.env | cut -d= -f2-) && git push "https://x-access-token:${GT}@github.com/USUARIO/REPO.git" main`.
+7. Mudança visível pro cliente → entrada nova em "Novidades".
+
+**Atalho: deploy só do site (sem reiniciar o motor).** Mudou só página estática? Não precisa reiniciar o sistema, nem arriscar um disparo em andamento:
+```bash
+rsync -az --delete app/site/ root@IP:/opt/meuapp/app/site/ && ssh root@IP 'cd /opt/meuapp; TAG=$(date +%Y%m%d-%H%M%S); docker build -q -t meuapp-site:$TAG ./app/site && docker service update -q --image meuapp-site:$TAG meuapp_site'
+```
+Trocou uma imagem mantendo o mesmo nome? O Cloudflare guarda a antiga em cache: mude o endereço (`foto.jpg?v=2`).
+
+**Cuidados que aprendemos:**
+- **Duas conversas do Claude no mesmo projeto:** o deploy publica tudo o que está na pasta naquele momento, inclusive o que a outra conversa ainda não terminou. Só uma publica por vez, depois do commit da outra.
+- **Comandos destrutivos ficam com você:** `git push --force`, `reset --hard` e apagar coisa na VPS o Claude não deve rodar por conta própria (o próprio Claude Code bloqueia vários deles). Ele te entrega o comando pronto e você roda.
+- **Token nunca no chat.** Se você colar um token na conversa, o Claude manda trocar, e ele está certo: o token vazou no histórico e pra quem estava vendo a sua tela.
+
 ---
 
 ## 7. Segurança e anti-ban
@@ -284,6 +322,44 @@ O que mais ajudou os clientes no dia a dia. Use como lista de ideias para o seu 
 **Infra:** Cloudflare na frente contra DDoS (seção 7.1).
 
 ---
+
+## 10. Dashboard de Lançamento (construído em 18/10/2026)
+
+Um painel só pra acompanhar um lançamento pago (evento ao vivo com ingresso barato, order bumps no checkout e uma oferta maior no pitch). Fica em `/lancamento`, só pra admin, com 4 abas.
+
+**De onde vêm os números**
+
+| Fonte | O que traz | Onde mora |
+|---|---|---|
+| Kiwify (webhook) | venda real, valor líquido, UTM, lote, forma de pagamento, nome | `kiwify_pedidos` + `events` |
+| Meta Ads (Marketing API) | gasto, impressões, cliques, checkout, vídeo, por campanha e por anúncio, a cada 30 min | `ads_diario`, `ads_anuncio_diario`, `ads_criativos`, `ads_hora` |
+| API do WhatsApp (pricing) | custo dos disparos e da recuperação | consulta na hora |
+| Página de vendas | visitas e de qual página veio a venda (`src` = sessão) | `checkout_sessions` |
+| Google Meet / Zoom / CSV | quem entrou na live, quando entrou e saiu | `lives`, `live_sessoes` |
+| Digitado no painel | metas e comparecimento da turma | `ws_turmas` |
+
+**Regra de ouro:** a venda REAL (Kiwify) vence a atribuição da Meta. ROAS, CPA e CAC são calculados com o líquido que caiu, e o número da Meta aparece só ao lado, pra comparar.
+
+**As 4 abas**
+1. **Visão geral:** faixa de alerta (dias pro evento e vendas que faltam pra meta), fases da turma, progresso diário com meta e projeção, ROAS geral (tudo que entrou ÷ anúncio + disparos), esteira (principal, bumps, pitch), Pix × cartão, lote, página de vendas, gráficos por hora (filtro de 1 dia) ou por dia, métricas da Meta coloridas por faixa de referência, metas e comparecimento.
+2. **Métricas da live:** presença minuto a minuto, pitch e marcos marcados à mão, quem estava no pitch, conversão da live, participantes × compradores, links da call e da gravação.
+3. **Ranking de criativos:** cada anúncio com investido, vendas reais, taxa de conversão, CAC e ROAS. A miniatura abre o criativo na Meta.
+4. **Kanban de vendas:** cada lead na coluna do passo mais avançado (carrinho → pagamento pendente → ingresso → bump → oferta do pitch → reembolso). Recarrega a cada 30 s, então o card anda sozinho quando chega evento.
+
+**Pra configurar o seu**
+1. **Seus produtos:** edite `app/web/src/lib/workshop-esteira.ts` (nomes, papel na esteira, preço, código do checkout) e a função `etapaDoProduto`, que reconhece o produto pelo nome que a Kiwify manda.
+2. **Token da Meta:** Gerenciador de Negócios → Usuários do sistema → atribua a CONTA DE ANÚNCIOS (controle total) e o pixel → Gerar token (expiração Nunca; `ads_read`, `ads_management`, `read_insights`, `business_management`) → cole em Integrações → Meta Ads.
+3. **Google Meet:** ative a Google Meet REST API e a Google Calendar API no projeto do login Google; adicione os escopos `https://www.googleapis.com/auth/meetings.space.readonly` e `https://www.googleapis.com/auth/calendar.events.readonly` (endereço COMPLETO); conecte a conta que CRIA a reunião.
+4. **Nos anúncios:** parâmetros de URL `utm_content={{ad.name}}&ad_id={{ad.id}}`. Sem o `ad_id`, anúncios com o mesmo nome se confundem no ranking.
+
+**Lições reais deste dia**
+- **ID errado = "sem permissão":** o campo da conta de anúncios aceitava o ID do PORTFÓLIO (o `business_id` da barra de endereço). A Meta respondia "o dono da conta não deu permissão" por dias, sem ninguém ver. Agora o dashboard mostra a recusa da Meta em vermelho.
+- **API mudou:** o `?ids=a,b,c` da Graph foi desativado (v26+). As miniaturas passaram a vir de `/{conta}/ads` com filtro de id.
+- **CSP silenciosa:** a regra de segurança do site bloqueava o GA4 (`analytics.google.com`, sem subdomínio) e a conversão do Google Ads (`ad.doubleclick.net`). Teste com navegador limpo, listando as requisições `collect`.
+- **Gráfico em SVG com viewBox fixo** cresce junto com a tela e ignora o zoom. Meça a largura real (ResizeObserver) e use altura em px.
+- **Meet gratuito corta a chamada a cada 1 h:** o mesmo link no mesmo dia vira várias "conferências". Junte por link + dia.
+- **Venda antes de existir o registro:** quando falta a forma de pagamento, um Pix gerado pelo mesmo telefone até 3 h antes da compra = Pix. Quando falta a página, uma visita com a mesma campanha + criativo até 90 min antes = aquela página. Deduzir na leitura, sem reescrever o banco.
+- **Compras de teste do dono contaminam a turma:** exclua o seu número das contas.
 
 ## Referências no projeto
 - `PRD.md` — o produto completo.

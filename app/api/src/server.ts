@@ -20,7 +20,8 @@ import { rodaCodigo } from "./engine/code-sandbox.js";
 import { FEATURES, featuresDoWorkspace, workspacePodeUsar } from "./features.js";
 import { configAsaasDoWorkspace, testarAsaas } from "./engine/asaas.js";
 import { configZapSignDoWorkspace, testarZapSign } from "./engine/zapsign.js";
-import { configMetaAdsDoWorkspace, origemMetaAds, testarMetaAds, normalizaActId, insightsDiariosPorCampanha } from "./engine/meta-ads.js";
+import { configMetaAdsDoWorkspace, origemMetaAds, testarMetaAds, normalizaActId, insightsDiariosPorCampanha, insightsDiariosPorAnuncio, criativosDosAnuncios } from "./engine/meta-ads.js";
+import { MEET_SCOPE, AGENDA_SCOPE, gravaLive, listaLives, sincronizaMeet, configZoom, tokenZoom, sincronizaZoom, liveDoCsv } from "./engine/lives.js";
 import { configResendDoWorkspace, enviarEmailResend, textoParaHtml } from "./engine/resend-email.js";
 import { extraiMarcador, consomeClique, camposDoClique, registraClique, filtraCamposClique } from "./engine/clique-origem.js";
 import { destinoPublicoOk, destinoResolveParaPublico } from "./lib/rede-segura.js";
@@ -1479,9 +1480,26 @@ async function processInbound(
     // pronta do botão "Entrar no Grupo de Avisos" da página de obrigado) roda mesmo com a pausa — é um
     // pedido explícito do lead, não conversa solta no meio do atendimento humano.
     const textoExato = String(msg.text ?? "").trim().toLowerCase();
-    const furaPausa = !!textoExato && loadAutomations().some((a: any) => a.enabled !== false && a.furaPausa === true
+    let furaPausa = !!textoExato && loadAutomations().some((a: any) => a.enabled !== false && a.furaPausa === true
       && a.trigger === "keyword" && fluxoNoNumero(a, contaDoInbound(platform))
       && String(a.keyword ?? "").split(",").map((w: string) => w.trim().toLowerCase()).filter(Boolean).includes(textoExato));
+    // Exceção 2 (17/10/2026): CLIQUE em botão de template também fura a pausa. Visto ao vivo: 4 compradores
+    // do White Label clicaram em "Entrar no grupo" e o link nunca saiu, porque o dono tinha respondido as
+    // conversas (pausa de 6 h). Só vale quando o texto é EXATAMENTE um botão de um fluxo "resposta de
+    // template" desse modelo, com o envio do modelo nos últimos 7 dias. Conversa solta segue calada.
+    if (!furaPausa && textoExato && !msg.fromMe && botPausado(phone)) {
+      const fP = await getContactFields(phone).catch(() => ({} as Record<string, string>));
+      const tplP = String(fP.ultimo_template ?? "");
+      const emP = Number(fP.ultimo_template_em ?? 0);
+      if (tplP && Date.now() / 1000 - emP < 7 * 86400) {
+        const normP = (t: string) => t.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+        furaPausa = loadAutomations().some((a: any) => a.enabled !== false && a.trigger === "template_reply"
+          && fluxoNoNumero(a, contaDoInbound(platform))
+          && String(a.templateName ?? "").split(",").map((x: string) => x.trim()).includes(tplP)
+          && (a.botoesGatilho ?? []).some((b: string) => normP(b) === normP(textoExato)));
+        if (furaPausa) console.log(`🔓 clique no botão "${textoExato.slice(0, 40)}" do modelo ${tplP} furou a pausa da IA · ${phone}`);
+      }
+    }
     if (botPausado(phone) && !furaPausa) {
       pushInbound({ from: phone, name: msg.name, text: (msg.text || "(mídia)").slice(0, 80), fromMe: false, blocked: "dono-assumiu" });
       return;
@@ -2789,11 +2807,27 @@ app.get("/google/oauth/callback", async (req, reply) => {
   if (q?.error) return reply.redirect(`${painel}?google_contatos=erro`);
   const code = String(q?.code ?? "");
   const dec = q?.state ? decryptSecret(String(q.state)) : null;
-  let st: { ws?: string; exp?: number } | null = null;
+  let st: { ws?: string; exp?: number; alvo?: string } | null = null;
   try { st = dec ? JSON.parse(dec) : null; } catch { st = null; }
   if (!code || !st?.ws || !st.exp || st.exp < Date.now()) {
     console.warn("google oauth callback: state inválido/expirado");
     return reply.redirect(`${painel}?google_contatos=erro`);
+  }
+  // 🎥 Conexão do GOOGLE MEET (métricas da live): conta própria, guardada à parte do Contatos —
+  // quem organiza a aula pode ser outra conta Google.
+  if (st.alvo === "meet") {
+    const volta = "https://painel.seudominio.com.br/lancamento/live-metricas";
+    try {
+      const tok = await exchangeGoogleCode({ clientId: config.googleOAuth.clientId, clientSecret: config.googleOAuth.clientSecret, code, redirectUri: config.googleOAuth.redirectUri });
+      if (!tok.refreshToken) return reply.redirect(`${volta}?meet=sem_refresh`);
+      const email = await googleUserEmail(tok.accessToken);
+      await saveConfigFor(st.ws, "live-meet-oauth", { enc: encryptSecret(tok.refreshToken), email: email ?? "", updatedAt: new Date().toISOString() });
+      console.log(`🎥 Google Meet conectado · ws ${st.ws.slice(0, 8)} · ${email ?? "?"}`);
+      return reply.redirect(`${volta}?meet=ok`);
+    } catch (e: any) {
+      console.error("google oauth callback (meet):", e?.message ?? e);
+      return reply.redirect(`${volta}?meet=erro`);
+    }
   }
   try {
     const tok = await exchangeGoogleCode({
@@ -6380,6 +6414,8 @@ async function capiWhatsAppGet(reply: any) {
   return reply.send({
     datasetId: String(c.datasetId ?? ""),
     temToken: !!c.tokenEnc,
+    // só os 4 últimos caracteres, pra tela mostrar "Token salvo · termina em …XXXX" (o token nunca volta)
+    tokenLast4: c.tokenEnc ? String(decryptSecret(String(c.tokenEnc)) ?? "").slice(-4) || null : null,
     testCode: String(c.testCode ?? ""),
     conexaoOficial: !!metaCreds(),
     etiquetas: ETIQUETAS_META,
@@ -9517,6 +9553,8 @@ async function recebeCheckoutNoFluxo(
     void registraPedidoKiwify({
       orderId: String(ev.eventId ?? ""), wsId, phone: ev.contact.phone, email: (ev.contact as any).email,
       produto: ev.product?.name, bruto: ev.amount ?? null, liquido: ev.fees?.producerNet ?? null, utm: ev.tracking ?? null,
+      oferta: ev.plan?.offerCode ?? null, nome: ev.contact.name ?? null,
+      pagamento: String((b?.order ?? b)?.payment_method ?? "").trim().toLowerCase().slice(0, 30) || null,
     });
   }
   else console.log(`📊 venda do workspace ${wsId}: NÃO avisada ao pixel da plataforma (o pixel é do dono; dado do comprador não sai da conta do cliente)`);
@@ -10100,7 +10138,7 @@ function headersPaginaPublica(reply: any) {
 //  • CONFIG do evento → config store ("workshop"), o mesmo mecanismo de toda configuração daqui.
 //  • VENDAS → tabela `sales`, que JÁ é idempotente por `order_id` e JÁ guarda `offer_code`,
 //    alimentada pelo webhook da Kiwify que existe. Tabela nova duplicaria a verdade.
-//  • A Kiwify manda `checkout_link` como CÓDIGO CURTO (ex.: "lgsNVIq") — que é exatamente o final
+//  • A Kiwify manda `checkout_link` como CÓDIGO CURTO (ex.: "CODIGO") — que é exatamente o final
 //    do link de cada lote. Então cada lote é contado pelo próprio código, sem configuração extra.
 //  • Reembolso/chargeback viram status 'estornada' lá → saem da conta sozinhos.
 interface WorkshopLote { nome: string; precoLabel: string; checkoutUrl: string; codigo: string; vagas: number }
@@ -10122,13 +10160,13 @@ const LOTES_PADRAO: WorkshopLote[] = [
   // R$ 17,00 é o que a Kiwify COBRA de verdade nessa oferta (confirmado no payload da venda da
   // uma cliente, 21/08: product_offer_name "Lote 01 R$ 17,00", charge_amount 1700). Estava 19 aqui e a
   // página anunciava um preço diferente do cobrado — o "de/por" também fica errado por tabela.
-  { nome: "Lote 1", precoLabel: "R$ 17,00", checkoutUrl: "https://pay.kiwify.com.br/SEU-CHECKOUT", codigo: "lgsNVIq", vagas: 50 },
-  { nome: "Lote 2", precoLabel: "R$ 27,00", checkoutUrl: "https://pay.kiwify.com.br/SEU-CHECKOUT", codigo: "284VJRz", vagas: 50 },
-  { nome: "Lote 3", precoLabel: "R$ 37,00", checkoutUrl: "https://pay.kiwify.com.br/SEU-CHECKOUT", codigo: "hgGYA2S", vagas: 50 },
-  { nome: "Lote 4", precoLabel: "R$ 47,00", checkoutUrl: "https://pay.kiwify.com.br/SEU-CHECKOUT", codigo: "TgtNiXF", vagas: 1000 },
+  { nome: "Lote 1", precoLabel: "R$ 17,00", checkoutUrl: "https://pay.kiwify.com.br/SEU-CHECKOUT", codigo: "CODIGO", vagas: 50 },
+  { nome: "Lote 2", precoLabel: "R$ 27,00", checkoutUrl: "https://pay.kiwify.com.br/SEU-CHECKOUT", codigo: "CODIGO", vagas: 50 },
+  { nome: "Lote 3", precoLabel: "R$ 37,00", checkoutUrl: "https://pay.kiwify.com.br/SEU-CHECKOUT", codigo: "CODIGO", vagas: 50 },
+  { nome: "Lote 4", precoLabel: "R$ 47,00", checkoutUrl: "https://pay.kiwify.com.br/SEU-CHECKOUT", codigo: "CODIGO", vagas: 1000 },
 ];
 const WORKSHOP_PADRAO: WorkshopCfg = {
-  nome: "Workshop WhatsApp API + Claude IA",
+  nome: "Seu Evento",
   dataISO: "2026-09-05", inicio: "09:00", fim: "14:00", tz: "America/Sao_Paulo",
   garantiaDias: 7, status: "aberto", lotes: LOTES_PADRAO, pisoPct: 95, tetoPct: 110,
 };
@@ -10446,7 +10484,12 @@ const EVENTOS_LANDING = new Set(["PageView", "ViewContent", "CliqueCheckout", "L
 // Meet do workshop) — a página não escolhe evento, então ninguém usa isto pra convidar gente pra outra
 // reunião do dono. Limite por IP. Só a próxima data do evento semanal.
 const MEET_WORKSHOP = "https://meet.google.com/SUA-SALA";
-app.post("/public/workshop/agenda", LIMITE_ANONIMO, async (req, reply) => {
+// Encontros do White Label (17/10/2026): série semanal "Call Onboarding WhiteLabel ZapConverte", quintas
+// 18h–21h. A página de obrigado do WL convida na SÉRIE inteira (os 4 encontros de uma vez).
+const MEET_WHITE_LABEL = "https://meet.google.com/SUA-SALA";
+app.post("/public/workshop/agenda", LIMITE_ANONIMO, (req, reply) => agendaPublica(req, reply, MEET_WORKSHOP, 8, false));
+app.post("/public/workshop/agenda-white-label", LIMITE_ANONIMO, (req, reply) => agendaPublica(req, reply, MEET_WHITE_LABEL, 14, true));
+async function agendaPublica(req: any, reply: any, meet: string, dias: number, serie: boolean) {
   const ip = clientIp(req);
   if (rateLimited("ws-agenda:" + ip, 6, 60 * 60_000)) return reply.code(429).send({ error: "Muitas tentativas. Tente de novo daqui a pouco." });
   const email = String((req.body as any)?.email ?? "").trim().toLowerCase().slice(0, 120);
@@ -10455,15 +10498,15 @@ app.post("/public/workshop/agenda", LIMITE_ANONIMO, async (req, reply) => {
     try {
       const access = await tokenGoogleDoWorkspace();
       if (!access) return reply.code(424).send({ error: "Agenda indisponível agora. Use o link do Google Agenda logo abaixo." });
-      const r = await convidarParaEventoOAuth(access, "primary", MEET_WORKSHOP, email, 8);
-      console.log(`📅 página de obrigado: ${email.replace(/(.{2}).*@/, "$1***@")} ${r.status === "convidado" ? "adicionado(a)" : "já estava"} em "${r.titulo.slice(0, 40)}"`);
+      const r = await convidarParaEventoOAuth(access, "primary", meet, email, dias, serie);
+      console.log(`📅 página de obrigado: ${email.replace(/(.{2}).*@/, "$1***@")} ${r.status === "convidado" ? "adicionado(a)" : "já estava"} em "${r.titulo.slice(0, 40)}"${serie ? " (série inteira)" : ""}`);
       return reply.send({ ok: true, status: r.status, inicio: r.inicio });
     } catch (e: any) {
       console.error("página de obrigado (agenda):", String(e?.message ?? e).slice(0, 200));
       return reply.code(424).send({ error: faltaEscopo(e) ? "Agenda indisponível agora. Use o link do Google Agenda logo abaixo." : "Não consegui adicionar agora. Use o link do Google Agenda logo abaixo." });
     }
   });
-});
+}
 
 app.post("/public/workshop/evento", LIMITE_ANONIMO, async (req, reply) => {
   const b = (req.body ?? {}) as any;
@@ -10485,7 +10528,7 @@ app.post("/public/workshop/evento", LIMITE_ANONIMO, async (req, reply) => {
     fbc: String(b?.fbc ?? "").slice(0, 300) || null,
     ip: ipPublico,
     userAgent: String(req.headers["user-agent"] ?? ""),
-    conteudo: "Workshop WhatsApp API + Claude IA",
+    conteudo: "Seu Evento",
   }).catch(() => false);
   return reply.send({ ok });
 });
@@ -10572,26 +10615,74 @@ async function avisaAfiliadoNovo(a: { nome: string; email: string; telefone: str
 // Meta GASTOU e atribui (ads_diario) × o que a Kiwify VENDEU de verdade (kiwify_pedidos + events)
 // × as conversas que chegaram (anúncio × orgânico). Regra da casa: venda real (Kiwify) vence a
 // atribuição da Meta. Sincroniza a Meta a cada 30 min quando houver Integrações → Meta Ads.
-async function sincronizaAdsDiario(wsId: string, dias = 3): Promise<{ linhas: number }> {
+// Última recusa da Meta por workspace: o dashboard mostra o MOTIVO (token sem ads_read, vencido…)
+// em vez de só "nunca sincronizada" — em 18/10 a sincronização falhava havia dias sem ninguém ver.
+const erroMetaAds = new Map<string, { msg: string; at: string }>();
+async function sincronizaAdsDiario(wsId: string, dias = 3): Promise<{ linhas: number; anuncios?: number }> {
   return runWithWorkspace(wsId, async () => {
     const cfg = configMetaAdsDoWorkspace();
     if (!cfg) return { linhas: 0 };
     const fmt = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Araguaina" }).format(d);
     const ate = fmt(new Date());
     const desde = fmt(new Date(Date.now() - (dias - 1) * 86_400_000));
-    const linhas = await insightsDiariosPorCampanha(cfg, desde, ate);
+    let linhas: Awaited<ReturnType<typeof insightsDiariosPorCampanha>>;
+    try { linhas = await insightsDiariosPorCampanha(cfg, desde, ate); erroMetaAds.delete(wsId); }
+    catch (e: any) { erroMetaAds.set(wsId, { msg: String(e?.message ?? e).slice(0, 300), at: new Date().toISOString() }); throw e; }
     for (const l of linhas) {
       await query(
-        `INSERT INTO ads_diario(workspace_id, data, campanha, campanha_id, objetivo, gasto, impressoes, alcance, ctr_link, lpv, ic, compras, valor, conversas, fonte, atualizado)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'api', now())
+        `INSERT INTO ads_diario(workspace_id, data, campanha, campanha_id, objetivo, gasto, impressoes, alcance, ctr_link, lpv, ic, compras, valor, conversas, cliques, video_3s, thruplay, fonte, atualizado)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'api', now())
          ON CONFLICT (workspace_id, data, campanha) DO UPDATE SET campanha_id=EXCLUDED.campanha_id, objetivo=EXCLUDED.objetivo,
            gasto=EXCLUDED.gasto, impressoes=EXCLUDED.impressoes, alcance=EXCLUDED.alcance, ctr_link=EXCLUDED.ctr_link,
            lpv=EXCLUDED.lpv, ic=EXCLUDED.ic, compras=EXCLUDED.compras, valor=EXCLUDED.valor, conversas=EXCLUDED.conversas,
+           cliques=EXCLUDED.cliques, video_3s=EXCLUDED.video_3s, thruplay=EXCLUDED.thruplay,
            fonte='api', atualizado=now()`,
-        [wsId, l.data, l.campanha, l.campanhaId, l.objetivo, l.gasto, l.impressoes, l.alcance, l.ctrLink, l.lpv, l.ic, l.compras, l.valor, l.conversas],
+        [wsId, l.data, l.campanha, l.campanhaId, l.objetivo, l.gasto, l.impressoes, l.alcance, l.ctrLink, l.lpv, l.ic, l.compras, l.valor, l.conversas,
+         l.cliques, l.video3s, l.thruplay],
       );
     }
-    return { linhas: linhas.length };
+    // Foto do gasto acumulado de HOJE (todas as campanhas; o painel filtra nada aqui — é o total da
+    // conta). Vira os gráficos "por hora" do dia: CPA, faturamento × investimento.
+    const gastoHoje = linhas.filter((l) => l.data === ate).reduce((s, l) => s + l.gasto, 0);
+    const gastoHojeWs = linhas.filter((l) => l.data === ate && /workshop|\bws\b/i.test(l.campanha)).reduce((s, l) => s + l.gasto, 0);
+    if (linhas.length) {
+      await query(`INSERT INTO ads_hora(workspace_id, ts, data, gasto) VALUES($1, date_trunc('minute', now()), $2, $3) ON CONFLICT DO NOTHING`,
+        [wsId + ":ws", ate, gastoHojeWs]).catch(() => {});
+      await query(`INSERT INTO ads_hora(workspace_id, ts, data, gasto) VALUES($1, date_trunc('minute', now()), $2, $3) ON CONFLICT DO NOTHING`,
+        [wsId, ate, gastoHoje]).catch(() => {});
+    }
+    // 🏆 Por anúncio (ranking de criativos). Falha aqui não derruba a sincronização das campanhas.
+    let anuncios = 0;
+    try {
+      const ads = await insightsDiariosPorAnuncio(cfg, desde, ate);
+      for (const a of ads) {
+        await query(
+          `INSERT INTO ads_anuncio_diario(workspace_id, data, ad_id, ad_nome, conjunto, campanha, gasto, impressoes, alcance, cliques, lpv, ic, compras, valor, video_3s, thruplay, atualizado)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
+           ON CONFLICT (workspace_id, data, ad_id) DO UPDATE SET ad_nome=EXCLUDED.ad_nome, conjunto=EXCLUDED.conjunto, campanha=EXCLUDED.campanha,
+             gasto=EXCLUDED.gasto, impressoes=EXCLUDED.impressoes, alcance=EXCLUDED.alcance, cliques=EXCLUDED.cliques, lpv=EXCLUDED.lpv,
+             ic=EXCLUDED.ic, compras=EXCLUDED.compras, valor=EXCLUDED.valor, video_3s=EXCLUDED.video_3s, thruplay=EXCLUDED.thruplay, atualizado=now()`,
+          [wsId, a.data, a.adId, a.adNome, a.conjunto, a.campanha, a.gasto, a.impressoes, a.alcance, a.cliques, a.lpv, a.ic, a.compras, a.valor, a.video3s, a.thruplay],
+        );
+      }
+      anuncios = ads.length;
+      // Miniaturas: só de quem gastou e está sem foto ou com foto de mais de 6 h (a URL da Meta expira).
+      const ids = [...new Set(ads.filter((a) => a.gasto > 0).map((a) => a.adId))];
+      const frescos = new Set((await query<any>(
+        `SELECT ad_id FROM ads_criativos WHERE workspace_id=$1 AND atualizado > now() - interval '6 hours' AND thumb IS NOT NULL AND link IS NOT NULL`, [wsId]).catch(() => [])).map((r) => r.ad_id));
+      const faltam = ids.filter((id) => !frescos.has(id));
+      if (faltam.length) {
+        for (const c of await criativosDosAnuncios(cfg, faltam)) {
+          await query(
+            `INSERT INTO ads_criativos(workspace_id, ad_id, nome, status, thumb, imagem, video_id, link, atualizado) VALUES($1,$2,$3,$4,$5,$6,$7,$8, now())
+             ON CONFLICT (workspace_id, ad_id) DO UPDATE SET nome=EXCLUDED.nome, status=EXCLUDED.status, thumb=EXCLUDED.thumb, imagem=EXCLUDED.imagem,
+               video_id=EXCLUDED.video_id, link=EXCLUDED.link, atualizado=now()`,
+            [wsId, c.adId, c.nome, c.status, c.thumb, c.imagem, c.videoId, c.link],
+          );
+        }
+      }
+    } catch (e: any) { console.error(`🏆 anúncios ${wsId.slice(0, 8)}:`, String(e?.message ?? e).slice(0, 200)); }
+    return { linhas: linhas.length, anuncios };
   });
 }
 function startAdsDiarioScheduler() {
@@ -10614,24 +10705,53 @@ async function dadosLancamento(wsId: string, q: any) {
   const ate = /^\d{4}-\d{2}-\d{2}$/.test(String(q?.ate ?? "")) ? String(q.ate) : hoje;
   const ini = Date.parse(de + "T00:00:00-03:00") / 1000, fim = Date.parse(ate + "T00:00:00-03:00") / 1000 + 86_400;
   const ads = await query<any>(
-    `SELECT to_char(data,'YYYY-MM-DD') AS data, campanha, objetivo, gasto::float, impressoes, alcance, ctr_link::float, lpv, ic, compras, valor::float, conversas, fonte, atualizado
+    `SELECT to_char(data,'YYYY-MM-DD') AS data, campanha, objetivo, gasto::float, impressoes, alcance, ctr_link::float, lpv, ic, compras, valor::float, conversas,
+            cliques, video_3s, thruplay, fonte, atualizado
        FROM ads_diario WHERE workspace_id=$1 AND data BETWEEN $2 AND $3 ORDER BY data, campanha`, [wsId, de, ate]).catch(() => []);
   // Vendas REAIS: kiwify_pedidos (com líquido e UTM, desde 13/10) + events de compra aprovada (antes
   // disso), sem duplicar o mesmo pedido (telefone + produto + dia).
   const vendas = await query<any>(
     `WITH p AS (
        SELECT regexp_replace(coalesce(phone,''),'[^0-9]','','g') AS fone, produto, bruto::float AS bruto, liquido::float AS liquido,
-              utm_source, utm_medium, utm_campaign, utm_content, created_at, 1 AS pri
+              utm_source, utm_medium, utm_campaign, utm_content, oferta, pagamento, src, email, nome, created_at, 1 AS pri
          FROM kiwify_pedidos WHERE workspace_id=$1 AND created_at >= to_timestamp($2) AND created_at < to_timestamp($3)
        UNION ALL
-       SELECT regexp_replace(coalesce(phone,''),'[^0-9]','','g'), product, amount::float, NULL, NULL, NULL, NULL, NULL, created_at, 2
+       SELECT regexp_replace(coalesce(phone,''),'[^0-9]','','g'), product, amount::float, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, created_at, 2
          FROM events WHERE workspace_id=$1 AND event='purchase_approved' AND platform='kiwify' AND created_at >= to_timestamp($2) AND created_at < to_timestamp($3)
      )
      SELECT DISTINCT ON (fone, produto, (created_at AT TIME ZONE 'America/Araguaina')::date)
-            fone, produto, bruto, liquido, utm_source, utm_medium, utm_campaign, utm_content,
+            fone, produto, bruto, liquido, utm_source, utm_medium, utm_campaign, utm_content, oferta, email, nome,
+            -- Sem forma de pagamento gravada (venda antes de 18/10 15h26): Pix gerado pelo MESMO telefone e
+            -- mesmo produto até 3 h antes da compra = foi Pix. Marca como "pix" e avisa que foi deduzido.
+            coalesce(pagamento, CASE WHEN EXISTS (
+              SELECT 1 FROM events e WHERE e.workspace_id=$1 AND e.event='pix_generated' AND e.product = p.produto
+                 AND right(regexp_replace(coalesce(e.phone,''),'[^0-9]','','g'), 10) = right(p.fone, 10) AND length(p.fone) >= 10
+                 AND e.created_at BETWEEN p.created_at - interval '3 hours' AND p.created_at) THEN 'pix' END) AS pagamento,
+            (pagamento IS NULL) AS pagamento_deduzido,
+            extract(epoch FROM created_at)::bigint AS ts,
+            coalesce((SELECT regexp_replace(cs.landing_url, '^https?://[^/]+(/[^?#]*)?.*$', '\\1') FROM checkout_sessions cs WHERE cs.trk = p.src), inf.pagina) AS pagina,
+            (p.src IS NULL AND inf.pagina IS NOT NULL) AS pagina_inferida,
+            coalesce((SELECT cs.ad_id FROM checkout_sessions cs WHERE cs.trk = p.src), CASE WHEN p.src ~ '^[0-9]{10,25}$' THEN p.src END, inf.ad_id) AS ad_id,
             to_char(created_at AT TIME ZONE 'America/Araguaina','YYYY-MM-DD') AS data,
-            to_char(created_at AT TIME ZONE 'America/Araguaina','DD/MM HH24:MI') AS quando
-       FROM p ORDER BY fone, produto, (created_at AT TIME ZONE 'America/Araguaina')::date, pri`, [wsId, ini, fim]).catch(() => []);
+            to_char(created_at AT TIME ZONE 'America/Araguaina','DD/MM HH24:MI') AS quando,
+            extract(hour FROM created_at AT TIME ZONE 'America/Araguaina')::int AS hora,
+            extract(dow FROM created_at AT TIME ZONE 'America/Araguaina')::int AS dow
+       -- Venda SEM a sessão da página (antes de 18/10, ou quem abriu o checkout por outro link):
+       -- deduz pela visita com a MESMA campanha e o MESMO criativo até 90 min antes da compra —
+       -- só quando todas essas visitas foram na mesma página (senão fica "sem página").
+       FROM p LEFT JOIN LATERAL (
+         SELECT CASE WHEN count(DISTINCT v.pg) = 1 THEN max(v.pg) END AS pagina,
+                CASE WHEN count(DISTINCT v.pg) = 1 THEN (array_agg(v.ad_id ORDER BY v.criada DESC))[1] END AS ad_id
+           FROM (SELECT regexp_replace(cs.landing_url, '^https?://[^/]+(/[^?#]*)?.*$', '\\1') AS pg, cs.ad_id, cs.created_at AS criada
+                   FROM checkout_sessions cs
+                  WHERE p.src IS NULL AND p.utm_campaign IS NOT NULL
+                    AND cs.utm_campaign = p.utm_campaign AND coalesce(cs.utm_content,'') = coalesce(p.utm_content,'')
+                    AND cs.created_at BETWEEN p.created_at - interval '90 minutes' AND p.created_at) v
+       ) inf ON true
+      -- Compras de TESTE do dono não entram no lançamento (ex.: 14/10 11:49 no próprio 11 …0000, que só
+      -- existia no registro antigo de eventos e virava o 26º ingresso da turma de 17/10).
+      WHERE right(p.fone, 11) NOT IN ('00000000000')
+      ORDER BY fone, produto, (created_at AT TIME ZONE 'America/Araguaina')::date, pri`, [wsId, ini, fim]).catch((e) => { console.error("📊 vendas do lançamento:", e?.message ?? e); return []; });
   // Conversas NOVAS no WPP Api por dia (primeira mensagem do chat cai no dia), anúncio × orgânico.
   const conversas = await query<any>(
     `WITH novas AS (
@@ -10644,18 +10764,258 @@ async function dadosLancamento(wsId: string, q: any) {
             count(*) FILTER (WHERE EXISTS (SELECT 1 FROM inbox_messages m WHERE m.workspace_id=$1 AND m.chat_id=novas.chat_id AND m.msg_type='ctwa'))::int AS anuncio
        FROM novas GROUP BY 1 ORDER BY 1`, [wsId, ini, fim]).catch(() => []);
   const disparos = await query<any>(
-    `SELECT id, nome, total, to_char(inicio AT TIME ZONE 'America/Araguaina','DD/MM HH24:MI') AS quando, templates
+    `SELECT id, nome, total, to_char(inicio AT TIME ZONE 'America/Araguaina','DD/MM HH24:MI') AS quando,
+            to_char(inicio AT TIME ZONE 'America/Araguaina','YYYY-MM-DD') AS data, templates
        FROM disparos_fluxo WHERE workspace_id=$1 AND inicio >= to_timestamp($2) AND inicio < to_timestamp($3) ORDER BY inicio`, [wsId, ini, fim]).catch(() => []);
-  return { de, ate, ads, vendas, conversas, disparos, metaAdsConfigurado: !!origemMetaAds(wsId), metaAdsOrigem: origemMetaAds(wsId) };
+  const turmas = await query<any>(
+    `SELECT to_char(turma,'YYYY-MM-DD') AS turma, meta_ingressos, meta_wl, meta_investimento::float, membros_grupo, pico_live, ficaram_pitch, obs
+       FROM ws_turmas WHERE workspace_id=$1 ORDER BY turma`, [wsId]).catch(() => []);
+  // Visitas das páginas de venda (1 sessão = 1 pessoa que abriu a página), por dia e por página.
+  const sessoes = await query<any>(
+    `SELECT to_char(created_at AT TIME ZONE 'America/Araguaina','YYYY-MM-DD') AS data,
+            coalesce(nullif(regexp_replace(landing_url, '^https?://[^/]+(/[^?#]*)?.*$', '\\1'), ''), '/') AS pagina,
+            count(*)::int AS n
+       FROM checkout_sessions WHERE created_at >= to_timestamp($1) AND created_at < to_timestamp($2) GROUP BY 1, 2`, [ini, fim]).catch(() => []);
+  // Gasto acumulado do dia, foto a cada sincronização (só hoje e ontem: é pros gráficos por hora).
+  const adsHora = await query<any>(
+    `SELECT workspace_id = $1 || ':ws' AS ws, to_char(data,'YYYY-MM-DD') AS data,
+            extract(hour FROM ts AT TIME ZONE 'America/Araguaina')::int AS hora,
+            extract(minute FROM ts AT TIME ZONE 'America/Araguaina')::int AS minuto, gasto::float
+       FROM ads_hora WHERE workspace_id IN ($1, $1 || ':ws') AND data >= (now() AT TIME ZONE 'America/Araguaina')::date - 1
+      ORDER BY ts`, [wsId]).catch(() => []);
+  // 💸 Custo da API do WhatsApp (templates e conversas pagas) por dia e categoria — a MESMA fonte da
+  // página Métricas (pricing_analytics da Meta). É custo POR USO: a fatura do cartão fecha por limite de
+  // gasto, então o total do período pode diferir alguns reais do extrato de cobrança. Cache de 5 min
+  // (pedido do dono em 18/10/2026: o gasto com disparo e recuperação entra no investimento do lançamento).
+  let apiCusto: Array<{ data: string; categoria: string; qtd: number; custo: number }> = [];
+  {
+    const cfgM = getCachedFor<any>(wsId, "meta-official");
+    const tokM = metaSegredo(cfgM, "accessToken"), wabaId = String(cfgM?.wabaId ?? "");
+    if (tokM && wabaId) {
+      const chave = "lanc-api:" + wsId + ":" + de + ":" + ate;
+      const c = metricasCache.get(chave);
+      if (c && Date.now() - c.at < 5 * 60_000) apiCusto = c.data as typeof apiCusto;
+      else {
+        const agoraSec = Math.floor(Date.now() / 1000);
+        const fimSec = Math.min(Math.floor(fim), agoraSec), iniSec = Math.max(Math.floor(ini), fimSec - 90 * 86_400); // a Graph aceita no máximo 90 dias
+        const diaSp = (seg: number) => new Date(seg * 1000).toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+        apiCusto = await metaCustoDiario(wabaId, tokM, iniSec, fimSec)
+          .then((ps) => ps.map((p) => ({ data: diaSp(p.start), categoria: p.categoria, qtd: p.qtd, custo: p.custo })))
+          .catch((e: any) => { console.error("📊 custo da API no lançamento:", e?.message ?? e); return [] as typeof apiCusto; });
+        metricasCache.set(chave, { at: Date.now(), data: apiCusto });
+      }
+    }
+  }
+  // 🎥 Presença: as lives já sincronizadas (Meet/Zoom/CSV em /lancamento/live-metricas), com os participantes
+  // distintos de cada uma. Só as reuniões da aula: o código do Meet fixo do workshop ou "workshop" no nome.
+  // A turma e a união manhã+tarde são calculadas no painel (mesma regra de turma das vendas).
+  const codigoMeet = (MEET_WORKSHOP.match(/[a-z]{3}-[a-z]{4}-[a-z]{3}/) ?? [""])[0];
+  const lives = await query<any>(
+    `SELECT l.id, l.codigo, l.titulo, l.inicio, l.fim, to_char(l.turma,'YYYY-MM-DD') AS turma,
+            to_char(l.inicio AT TIME ZONE 'America/Sao_Paulo','YYYY-MM-DD') AS dia,
+            coalesce(json_agg(json_build_object('pessoa', s.pessoa, 'nome', s.nome) ORDER BY s.nome) FILTER (WHERE s.pessoa IS NOT NULL), '[]') AS participantes
+       FROM lives l
+       LEFT JOIN (SELECT workspace_id, live_id, pessoa, min(nome) AS nome FROM live_sessoes GROUP BY 1, 2, 3) s
+         ON s.workspace_id = l.workspace_id AND s.live_id = l.id
+      WHERE l.workspace_id=$1 AND l.inicio >= to_timestamp($2) AND l.inicio < to_timestamp($3)
+        AND (l.codigo = $4 OR l.titulo ILIKE '%workshop%')
+      GROUP BY l.id, l.codigo, l.titulo, l.inicio, l.fim, l.turma ORDER BY l.inicio`, [wsId, ini, fim, codigoMeet]).catch((e: any) => { console.error("📊 lives do lançamento:", e?.message ?? e); return []; });
+  const w = leWorkshop();
+  return {
+    de, ate, ads, vendas, conversas, disparos, turmas, sessoes, adsHora, apiCusto, lives, meetCode: codigoMeet,
+    workshop: { inicio: w.inicio, fim: w.fim, lotes: w.lotes.map((l) => ({ nome: l.nome, precoLabel: l.precoLabel, codigo: l.codigo })) },
+    metaAdsConfigurado: !!origemMetaAds(wsId), metaAdsOrigem: origemMetaAds(wsId), metaAdsErro: erroMetaAds.get(wsId) ?? null,
+  };
 }
+// Meta e comparecimento de UMA turma (sábado). Campo vazio = null (apaga o número).
+async function salvaTurmaWorkshop(wsId: string, b: any) {
+  const turma = String(b?.turma ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(turma)) throw new Error("turma inválida (use AAAA-MM-DD do sábado)");
+  const n = (v: unknown) => { if (v === "" || v == null) return null; const x = Math.round(Number(v)); return Number.isFinite(x) && x >= 0 && x < 1e6 ? x : null; };
+  await query(
+    `INSERT INTO ws_turmas(workspace_id, turma, meta_ingressos, meta_wl, meta_investimento, membros_grupo, pico_live, ficaram_pitch, obs, atualizado)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+     ON CONFLICT (workspace_id, turma) DO UPDATE SET meta_ingressos=EXCLUDED.meta_ingressos, meta_wl=EXCLUDED.meta_wl,
+       meta_investimento=EXCLUDED.meta_investimento,
+       membros_grupo=EXCLUDED.membros_grupo, pico_live=EXCLUDED.pico_live, ficaram_pitch=EXCLUDED.ficaram_pitch,
+       obs=EXCLUDED.obs, atualizado=now()`,
+    [wsId, turma, n(b.meta_ingressos), n(b.meta_wl), n(b.meta_investimento), n(b.membros_grupo), n(b.pico_live), n(b.ficaram_pitch),
+     String(b.obs ?? "").trim().slice(0, 500) || null],
+  );
+}
+app.put("/admin/lancamento/turma", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  try { await salvaTurmaWorkshop(getPrimaryWorkspace(), req.body); return reply.send({ ok: true }); }
+  catch (e: any) { return reply.code(400).send({ error: String(e?.message ?? e).slice(0, 200) }); }
+});
 app.get("/admin/lancamento", async (req, reply) => {
   if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
   return reply.send(await dadosLancamento(getPrimaryWorkspace(), req.query));
 });
 app.post("/admin/lancamento/sincronizar", async (req, reply) => {
   if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
-  try { return reply.send({ ok: true, ...(await sincronizaAdsDiario(getPrimaryWorkspace(), 30)) }); }
+  // Botão "Atualizar Meta" = 30 dias. O dashboard também chama sozinho ao abrir/trocar de aba com
+  // dias=3 (18/10/2026): essa chamada leve vale no máximo 1× a cada 2 min, pra não bater no limite da Meta.
+  const dias = Math.max(1, Math.min(30, Math.round(Number((req.body as any)?.dias) || 30)));
+  const ws = getPrimaryWorkspace();
+  if (dias <= 3 && Date.now() - (ultimaSincLeve.get(ws) ?? 0) < 120_000) return reply.send({ ok: true, linhas: 0, pulou: true });
+  try { const r = await sincronizaAdsDiario(ws, dias); if (dias <= 3) ultimaSincLeve.set(ws, Date.now()); return reply.send({ ok: true, ...r }); }
   catch (e: any) { return reply.code(502).send({ error: String(e?.message ?? e).slice(0, 200) }); }
+});
+const ultimaSincLeve = new Map<string, number>();
+
+// 🗂️ KANBAN DE VENDAS (18/10/2026): cada lead da esteira com TODOS os eventos da Kiwify (carrinho,
+// Pix, recusado, compra) e os pedidos pagos (líquido + UTM), + nome e foto do contato. O painel decide a
+// coluna (o passo mais avançado) e a turma — assim o card anda sozinho quando chega evento novo.
+app.get("/admin/lancamento/kanban", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  const ws = getPrimaryWorkspace();
+  const q = req.query as any;
+  const de = /^\d{4}-\d{2}-\d{2}$/.test(String(q?.de ?? "")) ? String(q.de) : new Date(Date.now() - 21 * 86_400_000).toISOString().slice(0, 10);
+  const ate = /^\d{4}-\d{2}-\d{2}$/.test(String(q?.ate ?? "")) ? String(q.ate) : new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  const ini = Date.parse(de + "T00:00:00-03:00") / 1000, fim = Date.parse(ate + "T00:00:00-03:00") / 1000 + 86_400;
+  const TESTE = "00000000000"; // compras de teste do dono não viram lead
+  const eventos = await query<any>(
+    `SELECT regexp_replace(coalesce(phone,''),'[^0-9]','','g') AS fone, event, product AS produto, amount::float AS valor, extract(epoch FROM created_at)::bigint AS ts
+       FROM events WHERE workspace_id=$1 AND platform='kiwify' AND created_at >= to_timestamp($2) AND created_at < to_timestamp($3)
+        AND event IN ('cart_abandoned','pix_generated','purchase_refused','payment_delayed','purchase_approved','refund','chargeback')
+        AND right(regexp_replace(coalesce(phone,''),'[^0-9]','','g'), 11) <> $4
+      ORDER BY created_at`, [ws, ini, fim, TESTE]).catch(() => []);
+  const pedidos = await query<any>(
+    `SELECT regexp_replace(coalesce(phone,''),'[^0-9]','','g') AS fone, produto, bruto::float AS bruto, liquido::float AS liquido, nome, email,
+            utm_source, utm_medium, utm_campaign, utm_content, pagamento, extract(epoch FROM created_at)::bigint AS ts
+       FROM kiwify_pedidos WHERE workspace_id=$1 AND created_at >= to_timestamp($2) AND created_at < to_timestamp($3)
+        AND right(regexp_replace(coalesce(phone,''),'[^0-9]','','g'), 11) <> $4`, [ws, ini, fim, TESTE]).catch(() => []);
+  const fones = [...new Set([...eventos, ...pedidos].map((x) => String(x.fone).slice(-10)).filter((f) => f.length === 10))];
+  const contatos = fones.length ? await query<any>(
+    `SELECT right(regexp_replace(phone,'[^0-9]','','g'), 10) AS f10, name AS nome, avatar_url AS foto
+       FROM contacts WHERE workspace_id=$1 AND right(regexp_replace(phone,'[^0-9]','','g'), 10) = ANY($2)`, [ws, fones]).catch(() => []) : [];
+  return reply.send({ de, ate, eventos, pedidos, contatos });
+});
+
+// 🏆 RANKING DE CRIATIVOS: métricas da Meta por anúncio + miniatura. As vendas reais vêm do
+// /admin/lancamento (cada venda traz ad_id quando a sessão da página tinha) e o painel casa as duas.
+app.get("/admin/lancamento/criativos", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  const ws = getPrimaryWorkspace();
+  const q = req.query as any;
+  const de = /^\d{4}-\d{2}-\d{2}$/.test(String(q?.de ?? "")) ? String(q.de) : "2026-08-01";
+  const ate = /^\d{4}-\d{2}-\d{2}$/.test(String(q?.ate ?? "")) ? String(q.ate) : "2100-01-01";
+  const linhas = await query<any>(
+    `SELECT to_char(data,'YYYY-MM-DD') AS data, ad_id, ad_nome, conjunto, campanha, gasto::float, impressoes, alcance, cliques, lpv, ic, compras, valor::float, video_3s, thruplay
+       FROM ads_anuncio_diario WHERE workspace_id=$1 AND data BETWEEN $2 AND $3 ORDER BY data`, [ws, de, ate]).catch(() => []);
+  const criativos = await query<any>(`SELECT ad_id, nome, status, thumb, imagem, video_id, link, atualizado FROM ads_criativos WHERE workspace_id=$1`, [ws]).catch(() => []);
+  return reply.send({ linhas, criativos });
+});
+
+// 🎥 MÉTRICAS DA LIVE — lista (com as sessões de entrada/saída), status das fontes e sincronização.
+app.get("/admin/lancamento/lives", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  const ws = getPrimaryWorkspace();
+  const meet = getCachedFor<{ enc?: string; email?: string; updatedAt?: string }>(ws, "live-meet-oauth");
+  const zoom = getCachedFor<{ accountId?: string; clientId?: string; enc?: string }>(ws, "live-zoom-config");
+  return reply.send({
+    lives: await listaLives(ws),
+    filtro: getCachedFor<any>(ws, "live-filtro") ?? null,
+    fontes: {
+      meet: { conectado: !!meet?.enc, email: meet?.email ?? null, appGoogle: !!(config.googleOAuth.clientId && config.googleOAuth.clientSecret) },
+      zoom: { configurado: !!zoom?.enc, accountId: zoom?.accountId ?? null, clientId: zoom?.clientId ?? null },
+    },
+  });
+});
+app.post("/admin/lancamento/lives/meet/conectar", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  if (!config.googleOAuth.clientId || !config.googleOAuth.clientSecret) {
+    return reply.code(503).send({ error: "o login Google não está configurado no servidor (GOOGLE_OAUTH_CLIENT_ID/SECRET)" });
+  }
+  // Mesmo callback do Google Contatos; o "alvo" no state diz onde guardar (conta que ORGANIZA a aula).
+  const state = encryptSecret(JSON.stringify({ ws: getPrimaryWorkspace(), alvo: "meet", exp: Date.now() + 15 * 60_000 }));
+  return reply.send({ url: googleOAuthUrl({ clientId: config.googleOAuth.clientId, redirectUri: config.googleOAuth.redirectUri, scope: MEET_SCOPE + " " + AGENDA_SCOPE + " openid email", state }) });
+});
+app.put("/admin/lancamento/lives/zoom", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  const b = (req.body ?? {}) as any;
+  const ws = getPrimaryWorkspace();
+  if (b?.remover) { await saveConfigFor(ws, "live-zoom-config", null); return reply.send({ ok: true }); }
+  const cfgZ = { accountId: String(b.accountId ?? "").trim(), clientId: String(b.clientId ?? "").trim(), clientSecret: String(b.clientSecret ?? "").trim() };
+  if (!cfgZ.accountId || !cfgZ.clientId || !cfgZ.clientSecret) return reply.code(400).send({ error: "preencha Account ID, Client ID e Client Secret" });
+  try { await tokenZoom(cfgZ); } catch (e: any) { return reply.code(400).send({ error: String(e?.message ?? e).slice(0, 220) }); }
+  await saveConfigFor(ws, "live-zoom-config", { accountId: cfgZ.accountId, clientId: cfgZ.clientId, enc: encryptSecret(cfgZ.clientSecret), updatedAt: new Date().toISOString() });
+  return reply.send({ ok: true });
+});
+app.post("/admin/lancamento/lives/sincronizar", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  const ws = getPrimaryWorkspace();
+  const b = (req.body ?? {}) as any;
+  const dias = Math.min(180, Math.max(1, Number(b?.dias) || 60));
+  const desde = new Date(Date.now() - dias * 86_400_000).toISOString();
+  try {
+    let lives: Awaited<ReturnType<typeof sincronizaMeet>> = [];
+    if (b?.fonte === "zoom") {
+      const z = configZoom(ws);
+      if (!z) return reply.code(400).send({ error: "configure as chaves do Zoom primeiro" });
+      lives = await sincronizaZoom(await tokenZoom(z), desde);
+    } else {
+      const g = getCachedFor<{ enc?: string }>(ws, "live-meet-oauth");
+      const refresh = g?.enc ? decryptSecret(g.enc) : null;
+      if (!refresh) return reply.code(400).send({ error: "conecte a conta Google que organiza a aula primeiro" });
+      let access = "";
+      try { access = await refreshGoogleAccessToken({ clientId: config.googleOAuth.clientId, clientSecret: config.googleOAuth.clientSecret, refreshToken: refresh }); }
+      catch (e: any) {
+        if (/invalid_grant/i.test(String(e?.message ?? e))) { await saveConfigFor(ws, "live-meet-oauth", null); return reply.code(400).send({ error: "a autorização do Google venceu (no modo de teste dura 7 dias). Conecte de novo" }); }
+        throw e;
+      }
+      lives = await sincronizaMeet(access, desde);
+    }
+    for (const l of lives) await gravaLive(ws, l);
+    return reply.send({ ok: true, lives: lives.length, participantes: lives.reduce((s, l) => s + new Set(l.sessoes.map((x) => x.pessoa)).size, 0) });
+  } catch (e: any) { return reply.code(502).send({ error: String(e?.message ?? e).slice(0, 240) }); }
+});
+app.post("/admin/lancamento/lives/importar", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  const b = (req.body ?? {}) as any;
+  const dia = String(b?.dia ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) return reply.code(400).send({ error: "informe o dia da live" });
+  const csv = String(b?.csv ?? "");
+  if (csv.length > 3_000_000) return reply.code(400).send({ error: "arquivo grande demais (máx. 3 MB)" });
+  try {
+    const l = liveDoCsv(csv, dia, String(b?.titulo ?? "").trim().slice(0, 120), /^\d{2}:\d{2}$/.test(String(b?.hora ?? "")) ? String(b.hora) : "09:00");
+    await gravaLive(getPrimaryWorkspace(), l);
+    return reply.send({ ok: true, id: l.id, participantes: new Set(l.sessoes.map((s) => s.pessoa)).size });
+  } catch (e: any) { return reply.code(400).send({ error: String(e?.message ?? e).slice(0, 220) }); }
+});
+// Quais lives contam pras métricas do workshop (link da call, nome da reunião, mínimo de pessoas,
+// juntar as sessões do mesmo link no mesmo dia). Fica no servidor: vale em qualquer navegador.
+app.put("/admin/lancamento/lives/filtro", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  const b = (req.body ?? {}) as any;
+  const codigos = (Array.isArray(b?.codigos) ? b.codigos : []).map((c: any) => String(c ?? "").trim().toLowerCase().replace(/^.*meet\.google\.com\//, "").replace(/[^a-z-]/g, "")).filter((c: string) => c.length >= 8).slice(0, 30);
+  const termo = String(b?.termo ?? "").trim().slice(0, 80);
+  const minPessoas = Math.max(0, Math.min(500, Math.round(Number(b?.minPessoas) || 0)));
+  const juntar = b?.juntar !== false;
+  await saveConfigFor(getPrimaryWorkspace(), "live-filtro", { codigos, termo, minPessoas, juntar });
+  return reply.send({ ok: true, filtro: { codigos, termo, minPessoas, juntar } });
+});
+// Pitch (HH:MM), marcos ("Prova social 9h40"…) e a turma da live — marcados à mão.
+app.put("/admin/lancamento/lives/:id", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  const id = String((req.params as any).id ?? "");
+  const b = (req.body ?? {}) as any;
+  const hhmm = (v: any) => (/^\d{2}:\d{2}$/.test(String(v ?? "")) ? String(v) : null);
+  const marcos = (Array.isArray(b?.marcos) ? b.marcos : []).slice(0, 12)
+    .map((m: any) => ({ rot: String(m?.rot ?? "").trim().slice(0, 40), hhmm: hhmm(m?.hhmm) })).filter((m: any) => m.rot && m.hhmm);
+  const turma = /^\d{4}-\d{2}-\d{2}$/.test(String(b?.turma ?? "")) ? String(b.turma) : null;
+  await query(`UPDATE lives SET pitch=$3, marcos=$4, turma=$5, titulo=coalesce(nullif($6,''), titulo),
+                 titulo_manual = titulo_manual OR (nullif($6,'') IS NOT NULL AND $6 <> titulo) WHERE workspace_id=$1 AND id=$2`,
+    [getPrimaryWorkspace(), id, hhmm(b?.pitch), JSON.stringify(marcos), turma, String(b?.titulo ?? "").trim().slice(0, 160)]);
+  return reply.send({ ok: true });
+});
+app.delete("/admin/lancamento/lives/:id", async (req, reply) => {
+  if (!isAdmin(req)) return reply.code(401).send({ error: "não autorizado" });
+  const id = String((req.params as any).id ?? "");
+  await query(`DELETE FROM live_sessoes WHERE workspace_id=$1 AND live_id=$2`, [getPrimaryWorkspace(), id]);
+  await query(`DELETE FROM lives WHERE workspace_id=$1 AND id=$2`, [getPrimaryWorkspace(), id]);
+  return reply.send({ ok: true });
 });
 
 app.post("/public/afiliados/gerar", LIMITE_ANONIMO, async (req, reply) => {
